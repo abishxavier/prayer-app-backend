@@ -5,6 +5,11 @@ sys.path.append(os.getcwd())
 from app.db.session import Base
 from app.core.config import settings
 from app.models.user import User
+from app.models.chat import Chat
+from app.models.chat_member import ChatMember
+from app.models.message import Message
+from app.models.prayer_request import PrayerRequest
+from app.models.prayer_response import PrayerResponse
 
 target_metadata = Base.metadata
 
