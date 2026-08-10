@@ -13,6 +13,16 @@ app.include_router(prayers_router)
 app.include_router(ws_chat_router)
 
 
+import traceback
+from fastapi.responses import JSONResponse
+
+@app.exception_handler(Exception)
+async def global_exception_handler(request, exc):
+    return JSONResponse(
+        status_code=500,
+        content={"detail": f"Internal Server Error: {str(exc)}\n{traceback.format_exc()}"}
+    )
+
 @app.get("/health")
 def health_check():
     return {"status": "ok"}
