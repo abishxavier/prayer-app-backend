@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from typing import List
+from app.ws.manager import manager
 
 from app.db.session import get_db
 from app.core.security import get_current_user
@@ -97,3 +98,15 @@ def send_message(chat_id: str, payload: MessageCreate, db: Session = Depends(get
     db.commit()
     db.refresh(message)
     return message
+
+
+@router.get("/chats/{chat_id}/online-members")
+async def get_online_members(chat_id: str):
+    """
+    Returns user_ids currently connected to this chat's WebSocket room.
+    In-memory only - reflects the current process's connections, so if you
+    ever run multiple backend workers this will only see that worker's sockets.
+    Fine for ~100 users on a single instance; flag it if you scale out later.
+    """
+    online_user_ids = manager.online_members_in_chat(chat_id)
+    return {"chat_id": chat_id, "online_user_ids": list(online_user_ids)}
