@@ -7,3 +7,4 @@ firebase-admin
 python-jose[cryptography]
 python-multipart
 pydantic-settings
+agora-token-builder

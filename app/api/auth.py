@@ -5,15 +5,20 @@ from fastapi import Depends
 from app.db.session import get_db
 from app.core.security import verify_firebase_token, create_access_token, get_current_user
 from app.schemas.auth import LoginRequest, LoginResponse, RefreshRequest, RefreshResponse, LogoutRequest
-from app.schemas.user import UserOut
+from app.schemas.user import UserOut, UserUpdate
 from app.models.user import User
 from app.models.refresh_token import RefreshToken
 from datetime import datetime, timedelta, timezone
 import secrets
 from typing import List
 from app.schemas.auth import DeviceOut, RevokeOthersRequest
+from agora_token_builder import RtcTokenBuilder
+import os
 
 router = APIRouter()
+
+AGORA_APP_ID = os.getenv("AGORA_APP_ID", "")
+AGORA_APP_CERTIFICATE = os.getenv("AGORA_APP_CERTIFICATE", "")
 
 
 @router.post("/auth/login", response_model=LoginResponse)
@@ -197,3 +202,77 @@ def me(current_user: dict = Depends(get_current_user), db: Session = Depends(get
         raise HTTPException(status_code=404, detail="User not found")
 
     return user
+
+
+@router.post("/auth/delete-account")
+def delete_account(current_user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Deletes the current user and all associated refresh tokens."""
+    user_id = current_user.get("sub")
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Invalid auth token")
+
+    # Delete all refresh tokens
+    db.query(RefreshToken).filter(RefreshToken.user_id == user_id).delete()
+
+    # Delete user record
+    db.query(User).filter(User.id == user_id).delete()
+
+    db.commit()
+    return {"status": "ok", "message": "Account successfully deleted"}
+
+
+@router.put("/auth/me", response_model=UserOut)
+def update_profile(payload: UserUpdate, current_user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Updates the current authenticated user's profile."""
+    user_id = current_user.get("sub")
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    if payload.name is not None:
+        user.name = payload.name
+    if payload.phone is not None:
+        import re
+        user.phone = re.sub(r'[\s\-\(\)]', '', payload.phone)
+    if payload.profile_image is not None:
+        user.profile_image = payload.profile_image
+    if payload.status is not None:
+        user.status = payload.status
+    
+    db.add(user)
+    db.commit()
+    db.refresh(user)
+    return user
+
+
+@router.get("/auth/users/search", response_model=UserOut)
+def search_user_by_phone(phone: str, db: Session = Depends(get_db), current_user: dict = Depends(get_current_user)):
+    """Searches for a user by their phone number."""
+    import re
+    clean_phone = re.sub(r'[\s\-\(\)]', '', phone)
+    user = db.query(User).filter(User.phone == clean_phone).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User with this phone number not found")
+    return user
+
+
+@router.get("/auth/rtc-token")
+def get_rtc_token(channelName: str, current_user: dict = Depends(get_current_user)):
+    """Generates an Agora RTC token for the specified channel name."""
+    if not AGORA_APP_ID or not AGORA_APP_CERTIFICATE:
+        raise HTTPException(
+            status_code=500,
+            detail="Agora credentials not configured on backend"
+        )
+    
+    # Generate token (Uid = 0 allows any uid, Role = 1 is Publisher, expires in 24 hours)
+    token = RtcTokenBuilder.buildTokenWithUid(
+        AGORA_APP_ID,
+        AGORA_APP_CERTIFICATE,
+        channelName,
+        0,
+        1,
+        86400
+    )
+    
+    return {"token": token, "appId": AGORA_APP_ID}

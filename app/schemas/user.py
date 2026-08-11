@@ -16,3 +16,10 @@ class UserOut(BaseModel):
 
     class Config:
         orm_mode = True
+
+
+class UserUpdate(BaseModel):
+    name: Optional[str] = None
+    phone: Optional[str] = None
+    profile_image: Optional[str] = None
+    status: Optional[str] = None
