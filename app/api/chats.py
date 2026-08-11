@@ -37,7 +37,35 @@ def list_my_chats(db: Session = Depends(get_db), current_user: dict = Depends(ge
 
     chat_ids = db.query(ChatMember.chat_id).filter(ChatMember.user_id == user_id).subquery()
     chats = db.query(Chat).filter(Chat.id.in_(chat_ids)).all()
-    return chats
+    
+    result = []
+    from app.models.user import User
+    
+    for chat in chats:
+        chat_dict = {
+            "id": chat.id,
+            "name": chat.name,
+            "type": chat.type,
+            "created_by": chat.created_by,
+            "created_at": chat.created_at,
+            "other_member_name": None,
+            "other_member_image": None,
+        }
+        
+        if chat.type == ChatType.direct:
+            other_member = db.query(ChatMember).filter(
+                ChatMember.chat_id == chat.id, 
+                ChatMember.user_id != user_id
+            ).first()
+            if other_member:
+                other_user = db.query(User).filter(User.id == other_member.user_id).first()
+                if other_user:
+                    chat_dict["other_member_name"] = other_user.name
+                    chat_dict["other_member_image"] = other_user.profile_image
+                    
+        result.append(chat_dict)
+        
+    return result
 
 
 def _verify_membership(db: Session, chat_id: str, user_id: str):

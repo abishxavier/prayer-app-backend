@@ -16,6 +16,8 @@ class ChatOut(BaseModel):
     type: ChatType
     created_by: str
     created_at: datetime
+    other_member_name: Optional[str] = None
+    other_member_image: Optional[str] = None
 
     class Config:
         from_attributes = True
