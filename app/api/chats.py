@@ -5,7 +5,7 @@ from app.ws.manager import manager
 
 from app.db.session import get_db
 from app.core.security import get_current_user
-from app.models.chat import Chat
+from app.models.chat import Chat, ChatType
 from app.models.chat_member import ChatMember, MemberRole
 from app.models.message import Message
 from app.schemas.chat import ChatCreate, ChatOut, ChatMemberAdd, ChatMemberOut
@@ -52,7 +52,7 @@ def list_my_chats(db: Session = Depends(get_db), current_user: dict = Depends(ge
             "other_member_image": None,
         }
         
-        if chat.type == ChatType.direct:
+        if chat.type == ChatType.direct or chat.type == "direct" or chat.type.value == "direct":
             other_member = db.query(ChatMember).filter(
                 ChatMember.chat_id == chat.id, 
                 ChatMember.user_id != user_id
