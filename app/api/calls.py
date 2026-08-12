@@ -4,7 +4,7 @@ from typing import List
 from datetime import datetime, timezone
 
 from app.db.session import get_db
-from app.api.deps import get_current_user
+from app.core.security import get_current_user
 from app.models.call import ScheduledCall
 from app.models.user import User
 from app.schemas.call import ScheduledCallCreate, ScheduledCallOut

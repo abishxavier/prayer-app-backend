@@ -1,5 +1,6 @@
 from pydantic import BaseModel
 from datetime import datetime
+from typing import Optional
 from app.models.message import MessageType
 
 
@@ -15,6 +16,9 @@ class MessageOut(BaseModel):
     content: str
     message_type: MessageType
     created_at: datetime
+    sender_name: Optional[str] = None
+    sender_image: Optional[str] = None
+    sender_phone: Optional[str] = None
 
     class Config:
         from_attributes = True

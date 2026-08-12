@@ -62,6 +62,7 @@ def list_my_chats(db: Session = Depends(get_db), current_user: dict = Depends(ge
                 if other_user:
                     chat_dict["other_member_name"] = other_user.name
                     chat_dict["other_member_image"] = other_user.profile_image
+                    chat_dict["other_member_phone"] = other_user.phone
                     
         result.append(chat_dict)
         
@@ -100,15 +101,34 @@ def get_messages(chat_id: str, skip: int = 0, limit: int = 50, db: Session = Dep
     user_id = current_user["sub"]
     _verify_membership(db, chat_id, user_id)
 
+    from app.models.user import User
+
     messages = (
-        db.query(Message)
+        db.query(Message, User.name, User.profile_image, User.phone)
+        .join(User, Message.sender_id == User.id)
         .filter(Message.chat_id == chat_id)
         .order_by(Message.created_at.desc())
         .offset(skip)
         .limit(limit)
         .all()
     )
-    return list(reversed(messages))  # return oldest-first for natural chat reading order
+    
+    result = []
+    for msg, name, profile_image, phone in messages:
+        msg_dict = {
+            "id": msg.id,
+            "chat_id": msg.chat_id,
+            "sender_id": msg.sender_id,
+            "content": msg.content,
+            "message_type": msg.message_type,
+            "created_at": msg.created_at,
+            "sender_name": name,
+            "sender_image": profile_image,
+            "sender_phone": phone,
+        }
+        result.append(msg_dict)
+        
+    return list(reversed(result))  # return oldest-first for natural chat reading order
 
 
 @router.post("/chats/{chat_id}/messages", response_model=MessageOut)
