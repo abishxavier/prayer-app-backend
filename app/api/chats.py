@@ -241,16 +241,57 @@ async def delete_chat(chat_id: str, db: Session = Depends(get_db), current_user:
 async def list_my_chats(db: Session = Depends(get_db), current_user: dict = Depends(get_current_user)):
     user_id = current_user["sub"]
 
-    chat_ids = db.query(ChatMember.chat_id).filter(ChatMember.user_id == user_id).subquery()
+    # 1. Fetch user's memberships in bulk
+    my_memberships = db.query(ChatMember).filter(ChatMember.user_id == user_id).all()
+    chat_ids = [m.chat_id for m in my_memberships]
+    
+    if not chat_ids:
+        return []
+
+    # 2. Fetch chats in bulk
     chats = db.query(Chat).filter(Chat.id.in_(chat_ids)).all()
     
+    # 3. Fetch all memberships in these chats in bulk
+    all_members = db.query(ChatMember).filter(ChatMember.chat_id.in_(chat_ids)).all()
+    
+    # Group memberships by chat_id
+    from collections import defaultdict
+    members_by_chat = defaultdict(list)
+    for m in all_members:
+        members_by_chat[m.chat_id].append(m)
+
+    # 4. Find and fetch all "other users" for direct chats in bulk
+    other_user_ids = set()
+    for cid in chat_ids:
+        for m in members_by_chat[cid]:
+            if m.user_id != user_id:
+                other_user_ids.add(m.user_id)
+                
+    other_users = db.query(User).filter(User.id.in_(other_user_ids)).all() if other_user_ids else []
+    user_map = {u.id: u for u in other_users}
+
+    # 5. Fetch latest messages for each chat in bulk
+    from sqlalchemy import func
+    subq = db.query(
+        Message.chat_id,
+        func.max(Message.created_at).label("max_created_at")
+    ).filter(Message.chat_id.in_(chat_ids)).group_by(Message.chat_id).subquery()
+    
+    latest_messages = db.query(Message).join(
+        subq,
+        (Message.chat_id == subq.c.chat_id) & (Message.created_at == subq.c.max_created_at)
+    ).all()
+    latest_msg_map = {m.chat_id: m for m in latest_messages}
+
     result = []
     
     for chat in chats:
-        my_membership = db.query(ChatMember).filter(
-            ChatMember.chat_id == chat.id,
-            ChatMember.user_id == user_id
-        ).first()
+        # Find current user's membership role
+        my_role = "member"
+        for m in members_by_chat[chat.id]:
+            if m.user_id == user_id:
+                my_role = m.role.value if hasattr(m.role, 'value') else str(m.role)
+                break
 
         chat_dict = {
             "id": chat.id,
@@ -266,7 +307,7 @@ async def list_my_chats(db: Session = Depends(get_db), current_user: dict = Depe
             "allow_prayer_requests": chat.allow_prayer_requests,
             "allow_calls": chat.allow_calls,
             "pinned_message": chat.pinned_message,
-            "my_role": my_membership.role.value if my_membership and hasattr(my_membership.role, 'value') else "member",
+            "my_role": my_role,
             "other_member_id": None,
             "other_member_name": None,
             "other_member_image": None,
@@ -276,12 +317,15 @@ async def list_my_chats(db: Session = Depends(get_db), current_user: dict = Depe
         }
         
         if chat.type == ChatType.direct or chat.type == "direct" or getattr(chat.type, 'value', '') == "direct":
-            other_member = db.query(ChatMember).filter(
-                ChatMember.chat_id == chat.id, 
-                ChatMember.user_id != user_id
-            ).first()
-            if other_member:
-                other_user = db.query(User).filter(User.id == other_member.user_id).first()
+            # Find the other member in this chat
+            other_m = None
+            for m in members_by_chat[chat.id]:
+                if m.user_id != user_id:
+                    other_m = m
+                    break
+            
+            if other_m:
+                other_user = user_map.get(other_m.user_id)
                 if other_user:
                     chat_dict["other_member_id"] = other_user.id
                     chat_dict["other_member_name"] = other_user.name
@@ -290,7 +334,7 @@ async def list_my_chats(db: Session = Depends(get_db), current_user: dict = Depe
                     chat_dict["other_member_last_seen"] = other_user.last_seen
                     chat_dict["other_member_status"] = other_user.status
                     
-        latest_message = db.query(Message).filter(Message.chat_id == chat.id).order_by(Message.created_at.desc()).first()
+        latest_message = latest_msg_map.get(chat.id)
         chat_dict["last_message_at"] = latest_message.created_at if latest_message else chat.created_at
         
         result.append(chat_dict)
