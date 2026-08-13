@@ -6,6 +6,28 @@ from app.api.prayers import router as prayers_router
 from app.api.calls import router as calls_router
 from app.ws.chat import router as ws_chat_router
 
+# Run Alembic migrations programmatically on startup
+import os
+import sys
+from alembic.config import Config
+from alembic import command
+
+def run_migrations():
+    try:
+        print("Starting Alembic migrations...")
+        base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        # Append base_dir to sys.path so alembic can load modules properly
+        if base_dir not in sys.path:
+            sys.path.insert(0, base_dir)
+        ini_path = os.path.join(base_dir, "alembic.ini")
+        alembic_cfg = Config(ini_path)
+        command.upgrade(alembic_cfg, "head")
+        print("Alembic migrations completed successfully!")
+    except Exception as e:
+        print(f"Error during Alembic migration: {e}")
+
+run_migrations()
+
 app = FastAPI(title="Prayer App API")
 
 app.include_router(auth_router)
