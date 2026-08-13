@@ -1,6 +1,6 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
 from sqlalchemy.orm import Session
-from typing import List
+from typing import List, Optional
 from app.ws.manager import manager
 
 from app.db.session import get_db
@@ -8,17 +8,28 @@ from app.core.security import get_current_user
 from app.models.chat import Chat, ChatType
 from app.models.chat_member import ChatMember, MemberRole
 from app.models.message import Message
-from app.schemas.chat import ChatCreate, ChatOut, ChatMemberAdd, ChatMemberOut
+from app.models.blocked_user import BlockedUser
+from app.models.user import User
+from app.schemas.chat import (
+    ChatCreate, ChatOut, ChatMemberAdd, ChatMemberOut, ChatUpdate, ChatMemberRoleUpdate
+)
 from app.schemas.message import MessageCreate, MessageOut, MessageUpdate
+from app.services.fcm import send_push_notification
 
 router = APIRouter()
 
 
 @router.post("/chats", response_model=ChatOut)
-def create_chat(payload: ChatCreate, db: Session = Depends(get_db), current_user: dict = Depends(get_current_user)):
+async def create_chat(payload: ChatCreate, db: Session = Depends(get_db), current_user: dict = Depends(get_current_user)):
     user_id = current_user["sub"]
 
-    chat = Chat(name=payload.name, type=payload.type, created_by=user_id)
+    chat = Chat(
+        name=payload.name,
+        description=payload.description,
+        type=payload.type,
+        created_by=user_id,
+        group_image=payload.group_image,
+    )
     db.add(chat)
     db.commit()
     db.refresh(chat)
@@ -28,31 +39,195 @@ def create_chat(payload: ChatCreate, db: Session = Depends(get_db), current_user
     db.add(membership)
     db.commit()
 
+    chat_out = db.query(Chat).filter(Chat.id == chat.id).first()
+    setattr(chat_out, "my_role", "admin")
+    return chat_out
+
+
+def _verify_membership(db: Session, chat_id: str, user_id: str):
+    membership = db.query(ChatMember).filter(
+        ChatMember.chat_id == chat_id, ChatMember.user_id == user_id
+    ).first()
+    if not membership:
+        raise HTTPException(status_code=403, detail="You are not a member of this chat")
+    return membership
+
+
+@router.get("/chats/{chat_id}", response_model=ChatOut)
+async def get_chat(chat_id: str, db: Session = Depends(get_db), current_user: dict = Depends(get_current_user)):
+    user_id = current_user["sub"]
+    membership = _verify_membership(db, chat_id, user_id)
+
+    chat = db.query(Chat).filter(Chat.id == chat_id).first()
+    if not chat:
+        raise HTTPException(status_code=404, detail="Chat not found")
+
+    chat_dict = {
+        "id": chat.id,
+        "name": chat.name,
+        "description": chat.description,
+        "type": chat.type,
+        "created_by": chat.created_by,
+        "created_at": chat.created_at,
+        "group_image": chat.group_image,
+        "only_admins_can_post": chat.only_admins_can_post,
+        "only_admins_can_edit_info": chat.only_admins_can_edit_info,
+        "only_admins_can_add_members": chat.only_admins_can_add_members,
+        "allow_prayer_requests": chat.allow_prayer_requests,
+        "allow_calls": chat.allow_calls,
+        "pinned_message": chat.pinned_message,
+        "my_role": membership.role.value if hasattr(membership.role, 'value') else str(membership.role),
+        "other_member_id": None,
+        "other_member_name": None,
+        "other_member_image": None,
+        "other_member_phone": None,
+        "other_member_last_seen": None,
+    }
+
+    if chat.type == ChatType.direct or chat.type == "direct" or getattr(chat.type, 'value', '') == "direct":
+        other_member = db.query(ChatMember).filter(
+            ChatMember.chat_id == chat.id,
+            ChatMember.user_id != user_id
+        ).first()
+        if other_member:
+            other_user = db.query(User).filter(User.id == other_member.user_id).first()
+            if other_user:
+                chat_dict["other_member_id"] = other_user.id
+                chat_dict["other_member_name"] = other_user.name
+                chat_dict["other_member_image"] = other_user.profile_image
+                chat_dict["other_member_phone"] = other_user.phone
+                chat_dict["other_member_last_seen"] = other_user.last_seen
+
+    return chat_dict
+
+
+@router.put("/chats/{chat_id}", response_model=ChatOut)
+async def update_chat(chat_id: str, payload: ChatUpdate, db: Session = Depends(get_db), current_user: dict = Depends(get_current_user)):
+    user_id = current_user["sub"]
+    membership = _verify_membership(db, chat_id, user_id)
+
+    chat = db.query(Chat).filter(Chat.id == chat_id).first()
+    if not chat:
+        raise HTTPException(status_code=404, detail="Chat not found")
+
+    is_admin = (membership.role == MemberRole.admin or membership.role == "admin" or getattr(membership.role, 'value', '') == "admin" or chat.created_by == user_id)
+
+    if chat.type != ChatType.direct and chat.only_admins_can_edit_info and not is_admin:
+        raise HTTPException(status_code=403, detail="Only admins can edit this group info")
+
+    if payload.name is not None:
+        chat.name = payload.name
+    if payload.description is not None:
+        chat.description = payload.description
+    if payload.group_image is not None:
+        chat.group_image = payload.group_image
+
+    # Admin only permission settings
+    if is_admin:
+        if payload.only_admins_can_post is not None:
+            chat.only_admins_can_post = payload.only_admins_can_post
+        if payload.only_admins_can_edit_info is not None:
+            chat.only_admins_can_edit_info = payload.only_admins_can_edit_info
+        if payload.only_admins_can_add_members is not None:
+            chat.only_admins_can_add_members = payload.only_admins_can_add_members
+        if payload.allow_prayer_requests is not None:
+            chat.allow_prayer_requests = payload.allow_prayer_requests
+        if payload.allow_calls is not None:
+            chat.allow_calls = payload.allow_calls
+        if payload.pinned_message is not None:
+            chat.pinned_message = payload.pinned_message
+
+    db.add(chat)
+    db.commit()
+    db.refresh(chat)
+
+    try:
+        await manager.broadcast(chat_id, {
+            "type": "chat_updated",
+            "data": {
+                "id": chat.id,
+                "name": chat.name,
+                "description": chat.description,
+                "group_image": chat.group_image,
+                "only_admins_can_post": chat.only_admins_can_post,
+                "pinned_message": chat.pinned_message,
+            }
+        })
+    except Exception:
+        pass
+
+    setattr(chat, "my_role", membership.role.value if hasattr(membership.role, 'value') else str(membership.role))
     return chat
 
 
+@router.delete("/chats/{chat_id}")
+async def delete_chat(chat_id: str, db: Session = Depends(get_db), current_user: dict = Depends(get_current_user)):
+    user_id = current_user["sub"]
+    membership = _verify_membership(db, chat_id, user_id)
+
+    chat = db.query(Chat).filter(Chat.id == chat_id).first()
+    if not chat:
+        raise HTTPException(status_code=404, detail="Chat not found")
+
+    is_admin = (membership.role == MemberRole.admin or membership.role == "admin" or getattr(membership.role, 'value', '') == "admin" or chat.created_by == user_id)
+    if not is_admin and chat.type != ChatType.direct:
+        raise HTTPException(status_code=403, detail="Only admins can delete this group")
+
+    # Delete members and messages
+    db.query(Message).filter(Message.chat_id == chat_id).delete()
+    db.query(ChatMember).filter(ChatMember.chat_id == chat_id).delete()
+    db.query(Chat).filter(Chat.id == chat_id).delete()
+    db.commit()
+
+    try:
+        await manager.broadcast(chat_id, {
+            "type": "chat_deleted",
+            "chat_id": chat_id
+        })
+    except Exception:
+        pass
+
+    return {"status": "success", "message": "Chat deleted"}
+
+
 @router.get("/chats", response_model=List[ChatOut])
-def list_my_chats(db: Session = Depends(get_db), current_user: dict = Depends(get_current_user)):
+async def list_my_chats(db: Session = Depends(get_db), current_user: dict = Depends(get_current_user)):
     user_id = current_user["sub"]
 
     chat_ids = db.query(ChatMember.chat_id).filter(ChatMember.user_id == user_id).subquery()
     chats = db.query(Chat).filter(Chat.id.in_(chat_ids)).all()
     
     result = []
-    from app.models.user import User
     
     for chat in chats:
+        my_membership = db.query(ChatMember).filter(
+            ChatMember.chat_id == chat.id,
+            ChatMember.user_id == user_id
+        ).first()
+
         chat_dict = {
             "id": chat.id,
             "name": chat.name,
+            "description": chat.description,
             "type": chat.type,
             "created_by": chat.created_by,
             "created_at": chat.created_at,
+            "group_image": chat.group_image,
+            "only_admins_can_post": chat.only_admins_can_post,
+            "only_admins_can_edit_info": chat.only_admins_can_edit_info,
+            "only_admins_can_add_members": chat.only_admins_can_add_members,
+            "allow_prayer_requests": chat.allow_prayer_requests,
+            "allow_calls": chat.allow_calls,
+            "pinned_message": chat.pinned_message,
+            "my_role": my_membership.role.value if my_membership and hasattr(my_membership.role, 'value') else "member",
+            "other_member_id": None,
             "other_member_name": None,
             "other_member_image": None,
+            "other_member_phone": None,
+            "other_member_last_seen": None,
         }
         
-        if chat.type == ChatType.direct or chat.type == "direct" or chat.type.value == "direct":
+        if chat.type == ChatType.direct or chat.type == "direct" or getattr(chat.type, 'value', '') == "direct":
             other_member = db.query(ChatMember).filter(
                 ChatMember.chat_id == chat.id, 
                 ChatMember.user_id != user_id
@@ -60,6 +235,7 @@ def list_my_chats(db: Session = Depends(get_db), current_user: dict = Depends(ge
             if other_member:
                 other_user = db.query(User).filter(User.id == other_member.user_id).first()
                 if other_user:
+                    chat_dict["other_member_id"] = other_user.id
                     chat_dict["other_member_name"] = other_user.name
                     chat_dict["other_member_image"] = other_user.profile_image
                     chat_dict["other_member_phone"] = other_user.phone
@@ -74,19 +250,16 @@ def list_my_chats(db: Session = Depends(get_db), current_user: dict = Depends(ge
     return result
 
 
-def _verify_membership(db: Session, chat_id: str, user_id: str):
-    membership = db.query(ChatMember).filter(
-        ChatMember.chat_id == chat_id, ChatMember.user_id == user_id
-    ).first()
-    if not membership:
-        raise HTTPException(status_code=403, detail="You are not a member of this chat")
-    return membership
-
-
 @router.post("/chats/{chat_id}/members", response_model=ChatMemberOut)
-def add_member(chat_id: str, payload: ChatMemberAdd, db: Session = Depends(get_db), current_user: dict = Depends(get_current_user)):
+async def add_member(chat_id: str, payload: ChatMemberAdd, db: Session = Depends(get_db), current_user: dict = Depends(get_current_user)):
     user_id = current_user["sub"]
-    _verify_membership(db, chat_id, user_id)
+    my_membership = _verify_membership(db, chat_id, user_id)
+
+    chat = db.query(Chat).filter(Chat.id == chat_id).first()
+    if chat and chat.only_admins_can_add_members:
+        is_admin = (my_membership.role == MemberRole.admin or my_membership.role == "admin" or getattr(my_membership.role, 'value', '') == "admin" or chat.created_by == user_id)
+        if not is_admin:
+            raise HTTPException(status_code=403, detail="Only admins can add members to this group")
 
     existing = db.query(ChatMember).filter(
         ChatMember.chat_id == chat_id, ChatMember.user_id == payload.user_id
@@ -101,12 +274,54 @@ def add_member(chat_id: str, payload: ChatMemberAdd, db: Session = Depends(get_d
     return membership
 
 
+@router.put("/chats/{chat_id}/members/{target_user_id}/role")
+async def update_member_role(chat_id: str, target_user_id: str, payload: ChatMemberRoleUpdate, db: Session = Depends(get_db), current_user: dict = Depends(get_current_user)):
+    user_id = current_user["sub"]
+    my_membership = _verify_membership(db, chat_id, user_id)
+
+    chat = db.query(Chat).filter(Chat.id == chat_id).first()
+    is_admin = (my_membership.role == MemberRole.admin or my_membership.role == "admin" or getattr(my_membership.role, 'value', '') == "admin" or chat.created_by == user_id)
+    if not is_admin:
+        raise HTTPException(status_code=403, detail="Only admins can change member roles")
+
+    target_membership = db.query(ChatMember).filter(
+        ChatMember.chat_id == chat_id, ChatMember.user_id == target_user_id
+    ).first()
+    if not target_membership:
+        raise HTTPException(status_code=404, detail="Member not found in group")
+
+    target_membership.role = payload.role
+    db.commit()
+    return {"status": "success", "user_id": target_user_id, "role": payload.role}
+
+
+@router.delete("/chats/{chat_id}/members/{target_user_id}")
+async def remove_member(chat_id: str, target_user_id: str, db: Session = Depends(get_db), current_user: dict = Depends(get_current_user)):
+    user_id = current_user["sub"]
+    my_membership = _verify_membership(db, chat_id, user_id)
+
+    chat = db.query(Chat).filter(Chat.id == chat_id).first()
+    is_admin = (my_membership.role == MemberRole.admin or my_membership.role == "admin" or getattr(my_membership.role, 'value', '') == "admin" or chat.created_by == user_id)
+
+    # A user can remove themselves (Leave group), but removing others requires admin privilege
+    if target_user_id != user_id and not is_admin:
+        raise HTTPException(status_code=403, detail="Only admins can remove other members")
+
+    target_membership = db.query(ChatMember).filter(
+        ChatMember.chat_id == chat_id, ChatMember.user_id == target_user_id
+    ).first()
+    if not target_membership:
+        raise HTTPException(status_code=404, detail="Member not found")
+
+    db.delete(target_membership)
+    db.commit()
+    return {"status": "success", "message": "Member removed"}
+
+
 @router.get("/chats/{chat_id}/members", response_model=List[ChatMemberOut])
-def get_members(chat_id: str, db: Session = Depends(get_db), current_user: dict = Depends(get_current_user)):
+async def get_members(chat_id: str, db: Session = Depends(get_db), current_user: dict = Depends(get_current_user)):
     user_id = current_user["sub"]
     _verify_membership(db, chat_id, user_id)
-
-    from app.models.user import User
 
     members = (
         db.query(ChatMember, User.name, User.phone, User.profile_image)
@@ -133,11 +348,9 @@ def get_members(chat_id: str, db: Session = Depends(get_db), current_user: dict 
 
 
 @router.get("/chats/{chat_id}/messages", response_model=List[MessageOut])
-def get_messages(chat_id: str, skip: int = 0, limit: int = 50, db: Session = Depends(get_db), current_user: dict = Depends(get_current_user)):
+async def get_messages(chat_id: str, skip: int = 0, limit: int = 50, db: Session = Depends(get_db), current_user: dict = Depends(get_current_user)):
     user_id = current_user["sub"]
     _verify_membership(db, chat_id, user_id)
-
-    from app.models.user import User
 
     messages = (
         db.query(Message, User.name, User.profile_image, User.phone)
@@ -167,13 +380,30 @@ def get_messages(chat_id: str, skip: int = 0, limit: int = 50, db: Session = Dep
         }
         result.append(msg_dict)
         
-    return list(reversed(result))  # return oldest-first for natural chat reading order
+    return list(reversed(result))
 
 
 @router.post("/chats/{chat_id}/messages", response_model=MessageOut)
-def send_message(chat_id: str, payload: MessageCreate, db: Session = Depends(get_db), current_user: dict = Depends(get_current_user)):
+async def send_message(chat_id: str, payload: MessageCreate, db: Session = Depends(get_db), current_user: dict = Depends(get_current_user)):
     user_id = current_user["sub"]
-    _verify_membership(db, chat_id, user_id)
+    my_membership = _verify_membership(db, chat_id, user_id)
+
+    chat = db.query(Chat).filter(Chat.id == chat_id).first()
+    if chat and chat.only_admins_can_post:
+        is_admin = (my_membership.role == MemberRole.admin or my_membership.role == "admin" or getattr(my_membership.role, 'value', '') == "admin" or chat.created_by == user_id)
+        if not is_admin:
+            raise HTTPException(status_code=403, detail="Only admins can send messages in this group")
+
+    # Check if receiver has blocked sender in direct chat
+    if chat and (chat.type == ChatType.direct or getattr(chat.type, 'value', '') == 'direct'):
+        other_member = db.query(ChatMember).filter(ChatMember.chat_id == chat_id, ChatMember.user_id != user_id).first()
+        if other_member:
+            is_blocked = db.query(BlockedUser).filter(
+                BlockedUser.user_id == other_member.user_id,
+                BlockedUser.blocked_user_id == user_id
+            ).first()
+            if is_blocked:
+                raise HTTPException(status_code=403, detail="You cannot send messages to this contact")
 
     message = Message(
         chat_id=chat_id,
@@ -185,19 +415,11 @@ def send_message(chat_id: str, payload: MessageCreate, db: Session = Depends(get
     db.commit()
     db.refresh(message)
     
-    # fetch sender info
-    from app.models.user import User
     user = db.query(User).filter(User.id == user_id).first()
-
-    import asyncio
-    from app.services.fcm import send_push_notification
-    from app.models.chat import Chat
-    
-    chat = db.query(Chat).filter(Chat.id == chat_id).first()
     chat_name = chat.name if chat and chat.name else "JIPF Chat"
 
-    async def notify_members():
-        # broadcast WebSocket
+    # Broadcast directly in async event loop
+    try:
         await manager.broadcast(chat_id, {
             "type": "message",
             "data": {
@@ -205,7 +427,7 @@ def send_message(chat_id: str, payload: MessageCreate, db: Session = Depends(get
                 "chat_id": str(chat_id),
                 "sender_id": str(user_id),
                 "content": message.content,
-                "message_type": message.message_type.value,
+                "message_type": message.message_type.value if hasattr(message.message_type, 'value') else str(message.message_type),
                 "is_edited": message.is_edited,
                 "is_deleted": message.is_deleted,
                 "is_read": message.is_read,
@@ -215,35 +437,41 @@ def send_message(chat_id: str, payload: MessageCreate, db: Session = Depends(get
                 "sender_phone": user.phone if user else None,
             }
         })
+    except Exception:
+        pass
 
-        # send push notification to all other members
+    # Push notifications to offline members
+    try:
         members = db.query(ChatMember).filter(ChatMember.chat_id == chat_id, ChatMember.user_id != user_id).all()
         for member in members:
             member_user = db.query(User).filter(User.id == member.user_id).first()
             if member_user and member_user.device_token:
-                title = f"{user.name if user else 'Someone'} ({chat_name})" if chat and chat.type.value == 'group' else (user.name if user else 'New Message')
+                title = f"{user.name if user else 'Someone'} ({chat_name})" if chat and getattr(chat.type, 'value', '') == 'group' else (user.name if user else 'New Message')
                 send_push_notification(
                     token=member_user.device_token,
                     title=title,
                     body=message.content,
                     data={"chat_id": chat_id, "type": "message"}
                 )
+    except Exception:
+        pass
 
-    asyncio.create_task(notify_members())
-    
     return message
 
 
 @router.put("/chats/{chat_id}/messages/{message_id}", response_model=MessageOut)
-def update_message(chat_id: str, message_id: str, payload: MessageUpdate, db: Session = Depends(get_db), current_user: dict = Depends(get_current_user)):
+async def update_message(chat_id: str, message_id: str, payload: MessageUpdate, db: Session = Depends(get_db), current_user: dict = Depends(get_current_user)):
     user_id = current_user["sub"]
-    _verify_membership(db, chat_id, user_id)
+    my_membership = _verify_membership(db, chat_id, user_id)
 
     message = db.query(Message).filter(Message.id == message_id, Message.chat_id == chat_id).first()
     if not message:
         raise HTTPException(status_code=404, detail="Message not found")
     
-    if message.sender_id != user_id:
+    chat = db.query(Chat).filter(Chat.id == chat_id).first()
+    is_admin = (my_membership.role == MemberRole.admin or my_membership.role == "admin" or getattr(my_membership.role, 'value', '') == "admin" or (chat and chat.created_by == user_id))
+
+    if message.sender_id != user_id and not is_admin:
         raise HTTPException(status_code=403, detail="You can only edit your own messages")
 
     if payload.content is not None:
@@ -256,49 +484,56 @@ def update_message(chat_id: str, message_id: str, payload: MessageUpdate, db: Se
     db.commit()
     db.refresh(message)
     
-    # Broadcast edit/delete
-    import asyncio
-    asyncio.create_task(manager.broadcast(chat_id, {
-        "type": "message_updated",
-        "data": {
-            "id": str(message.id),
-            "content": message.content,
-            "is_edited": message.is_edited,
-            "is_deleted": message.is_deleted,
-        }
-    }))
+    try:
+        await manager.broadcast(chat_id, {
+            "type": "message_updated",
+            "data": {
+                "id": str(message.id),
+                "content": message.content,
+                "is_edited": message.is_edited,
+                "is_deleted": message.is_deleted,
+            }
+        })
+    except Exception:
+        pass
     
     return message
 
+
 @router.delete("/chats/{chat_id}/messages/{message_id}")
-def delete_message(chat_id: str, message_id: str, db: Session = Depends(get_db), current_user: dict = Depends(get_current_user)):
+async def delete_message(chat_id: str, message_id: str, db: Session = Depends(get_db), current_user: dict = Depends(get_current_user)):
     user_id = current_user["sub"]
-    _verify_membership(db, chat_id, user_id)
+    my_membership = _verify_membership(db, chat_id, user_id)
 
     message = db.query(Message).filter(Message.id == message_id, Message.chat_id == chat_id).first()
     if not message:
         raise HTTPException(status_code=404, detail="Message not found")
     
-    if message.sender_id != user_id:
-        raise HTTPException(status_code=403, detail="You can only delete your own messages")
+    chat = db.query(Chat).filter(Chat.id == chat_id).first()
+    is_admin = (my_membership.role == MemberRole.admin or my_membership.role == "admin" or getattr(my_membership.role, 'value', '') == "admin" or (chat and chat.created_by == user_id))
+
+    if message.sender_id != user_id and not is_admin:
+        raise HTTPException(status_code=403, detail="Only sender or admin can delete this message")
 
     message.is_deleted = True
     db.commit()
     
-    import asyncio
-    asyncio.create_task(manager.broadcast(chat_id, {
-        "type": "message_deleted",
-        "data": {"id": str(message.id)}
-    }))
+    try:
+        await manager.broadcast(chat_id, {
+            "type": "message_deleted",
+            "data": {"id": str(message.id)}
+        })
+    except Exception:
+        pass
     
     return {"status": "deleted"}
 
+
 @router.post("/chats/{chat_id}/read")
-def mark_messages_read(chat_id: str, db: Session = Depends(get_db), current_user: dict = Depends(get_current_user)):
+async def mark_messages_read(chat_id: str, db: Session = Depends(get_db), current_user: dict = Depends(get_current_user)):
     user_id = current_user["sub"]
     _verify_membership(db, chat_id, user_id)
 
-    # Mark all messages sent by OTHERS in this chat as read
     updated = db.query(Message).filter(
         Message.chat_id == chat_id,
         Message.sender_id != user_id,
@@ -308,10 +543,62 @@ def mark_messages_read(chat_id: str, db: Session = Depends(get_db), current_user
     db.commit()
 
     if updated > 0:
-        import asyncio
-        asyncio.create_task(manager.broadcast(chat_id, {
-            "type": "messages_read",
-            "reader_id": user_id
-        }))
+        try:
+            await manager.broadcast(chat_id, {
+                "type": "messages_read",
+                "reader_id": user_id
+            })
+        except Exception:
+            pass
 
     return {"status": "success"}
+
+
+# ── User Blocking Endpoints ──
+
+@router.post("/users/block/{target_user_id}")
+async def block_user(target_user_id: str, db: Session = Depends(get_db), current_user: dict = Depends(get_current_user)):
+    user_id = current_user["sub"]
+    if target_user_id == user_id:
+        raise HTTPException(status_code=400, detail="You cannot block yourself")
+
+    existing = db.query(BlockedUser).filter(
+        BlockedUser.user_id == user_id, BlockedUser.blocked_user_id == target_user_id
+    ).first()
+    if not existing:
+        blocked = BlockedUser(user_id=user_id, blocked_user_id=target_user_id)
+        db.add(blocked)
+        db.commit()
+    return {"status": "success", "message": "User blocked successfully"}
+
+
+@router.post("/users/unblock/{target_user_id}")
+async def unblock_user(target_user_id: str, db: Session = Depends(get_db), current_user: dict = Depends(get_current_user)):
+    user_id = current_user["sub"]
+    db.query(BlockedUser).filter(
+        BlockedUser.user_id == user_id, BlockedUser.blocked_user_id == target_user_id
+    ).delete()
+    db.commit()
+    return {"status": "success", "message": "User unblocked successfully"}
+
+
+@router.get("/users/blocked")
+async def get_blocked_users(db: Session = Depends(get_db), current_user: dict = Depends(get_current_user)):
+    user_id = current_user["sub"]
+    blocks = (
+        db.query(BlockedUser, User.name, User.phone, User.profile_image)
+        .join(User, BlockedUser.blocked_user_id == User.id)
+        .filter(BlockedUser.user_id == user_id)
+        .all()
+    )
+    return [
+        {
+            "id": b.id,
+            "blocked_user_id": b.blocked_user_id,
+            "name": name,
+            "phone": phone,
+            "profile_image": profile_image,
+            "created_at": b.created_at
+        }
+        for b, name, phone, profile_image in blocks
+    ]

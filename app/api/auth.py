@@ -248,6 +248,8 @@ def update_profile(payload: UserUpdate, current_user: dict = Depends(get_current
         user.phone = re.sub(r'[\s\-\(\)]', '', payload.phone)
     if payload.profile_image is not None:
         user.profile_image = payload.profile_image
+    if payload.profile_visibility is not None:
+        user.profile_visibility = payload.profile_visibility
     if payload.status is not None:
         user.status = payload.status
     
@@ -279,6 +281,24 @@ def search_user_by_phone(phone: str, db: Session = Depends(get_db), current_user
     user = db.query(User).filter(User.phone == clean_phone).first()
     if not user:
         raise HTTPException(status_code=404, detail="User with this phone number not found")
+    return user
+
+
+@router.get("/auth/users/{user_id}", response_model=UserOut)
+def get_user_profile(user_id: str, db: Session = Depends(get_db), current_user: dict = Depends(get_current_user)):
+    """Gets another user's profile, respecting visibility settings."""
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    # Simple visibility logic
+    # "nobody" -> hide profile image and bio/status maybe? Or just hide profile image
+    # "contacts" -> for now treat as everyone, fully implement contacts later if needed
+    if user.profile_visibility == "nobody":
+        user.profile_image = None
+        user.bio = None
+        user.status = None
+    
     return user
 
 

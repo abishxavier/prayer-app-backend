@@ -12,6 +12,7 @@ class UserOut(BaseModel):
     email: str
     phone: Optional[str] = None
     profile_image: Optional[str] = None
+    profile_visibility: Optional[str] = "everyone"
     status: Optional[str] = None
     last_seen: Optional[datetime] = None
     created_at: Optional[datetime] = None
@@ -26,6 +27,7 @@ class UserUpdate(BaseModel):
     bio: Optional[str] = None
     phone: Optional[str] = None
     profile_image: Optional[str] = None
+    profile_visibility: Optional[str] = None
     status: Optional[str] = None
 
 

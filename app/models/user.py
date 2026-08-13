@@ -13,6 +13,7 @@ class User(Base):
     email = Column(String, unique=True, nullable=False)
     phone = Column(String, nullable=True)
     profile_image = Column(String, nullable=True)
+    profile_visibility = Column(String, default="everyone") # "everyone", "contacts", "nobody"
     status = Column(String, nullable=True)
     last_seen = Column(DateTime, nullable=True)
     device_token = Column(String, nullable=True)
