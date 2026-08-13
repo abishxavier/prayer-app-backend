@@ -63,6 +63,16 @@ async def chat_websocket(websocket: WebSocket, chat_id: str, token: str = Query(
 
         await manager.connect(chat_id, str(user.id), websocket)
 
+        # Send presence status of currently online members in this chat room to the newly connected user
+        active_room_conns = manager.active_connections.get(chat_id, [])
+        for uid, ws in active_room_conns:
+            if uid != str(user.id):
+                await websocket.send_json({
+                    "type": "presence",
+                    "user_id": uid,
+                    "status": "online",
+                })
+
         # Mark online + broadcast join, but only if this is genuinely a new
         # online transition (avoids spamming "joined" if they had another tab open)
         was_already_online = manager.online_users.get(str(user.id), 0) > 1

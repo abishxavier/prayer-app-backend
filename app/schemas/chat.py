@@ -10,6 +10,7 @@ class ChatCreate(BaseModel):
     description: Optional[str] = None
     type: ChatType = ChatType.direct
     group_image: Optional[str] = None
+    target_user_id: Optional[str] = None
 
 
 class ChatUpdate(BaseModel):
@@ -44,6 +45,7 @@ class ChatOut(BaseModel):
     other_member_phone: Optional[str] = None
     other_member_image: Optional[str] = None
     other_member_last_seen: Optional[datetime] = None
+    other_member_status: Optional[str] = None
     last_message_at: Optional[datetime] = None
 
     class Config:

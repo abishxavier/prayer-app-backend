@@ -23,6 +23,51 @@ router = APIRouter()
 async def create_chat(payload: ChatCreate, db: Session = Depends(get_db), current_user: dict = Depends(get_current_user)):
     user_id = current_user["sub"]
 
+    # If it is a direct chat and target_user_id is provided, check for existing chat
+    if (payload.type == ChatType.direct or payload.type == "direct") and payload.target_user_id:
+        # Check if direct chat already exists where both user_id and target_user_id are members
+        user_chats = db.query(ChatMember.chat_id).join(Chat, Chat.id == ChatMember.chat_id).filter(
+            Chat.type == ChatType.direct,
+            ChatMember.user_id == user_id
+        ).subquery()
+
+        existing_member = db.query(ChatMember).filter(
+            ChatMember.chat_id.in_(user_chats),
+            ChatMember.user_id == payload.target_user_id
+        ).first()
+
+        if existing_member:
+            chat_out = db.query(Chat).filter(Chat.id == existing_member.chat_id).first()
+            my_membership = db.query(ChatMember).filter(
+                ChatMember.chat_id == chat_out.id,
+                ChatMember.user_id == user_id
+            ).first()
+            setattr(chat_out, "my_role", my_membership.role.value if my_membership and hasattr(my_membership.role, 'value') else "member")
+            return chat_out
+
+        # Create new direct chat and add both members atomically
+        chat = Chat(
+            name=payload.name,
+            description=payload.description,
+            type=payload.type,
+            created_by=user_id,
+            group_image=payload.group_image,
+        )
+        db.add(chat)
+        db.commit()
+        db.refresh(chat)
+
+        membership_creator = ChatMember(chat_id=chat.id, user_id=user_id, role=MemberRole.admin)
+        membership_target = ChatMember(chat_id=chat.id, user_id=payload.target_user_id, role=MemberRole.member)
+        db.add(membership_creator)
+        db.add(membership_target)
+        db.commit()
+
+        chat_out = db.query(Chat).filter(Chat.id == chat.id).first()
+        setattr(chat_out, "my_role", "admin")
+        return chat_out
+
+    # Default creation logic (e.g. for group chats or if target_user_id is not specified)
     chat = Chat(
         name=payload.name,
         description=payload.description,
@@ -82,6 +127,7 @@ async def get_chat(chat_id: str, db: Session = Depends(get_db), current_user: di
         "other_member_image": None,
         "other_member_phone": None,
         "other_member_last_seen": None,
+        "other_member_status": None,
     }
 
     if chat.type == ChatType.direct or chat.type == "direct" or getattr(chat.type, 'value', '') == "direct":
@@ -97,6 +143,7 @@ async def get_chat(chat_id: str, db: Session = Depends(get_db), current_user: di
                 chat_dict["other_member_image"] = other_user.profile_image
                 chat_dict["other_member_phone"] = other_user.phone
                 chat_dict["other_member_last_seen"] = other_user.last_seen
+                chat_dict["other_member_status"] = other_user.status
 
     return chat_dict
 
@@ -225,6 +272,7 @@ async def list_my_chats(db: Session = Depends(get_db), current_user: dict = Depe
             "other_member_image": None,
             "other_member_phone": None,
             "other_member_last_seen": None,
+            "other_member_status": None,
         }
         
         if chat.type == ChatType.direct or chat.type == "direct" or getattr(chat.type, 'value', '') == "direct":
@@ -240,6 +288,7 @@ async def list_my_chats(db: Session = Depends(get_db), current_user: dict = Depe
                     chat_dict["other_member_image"] = other_user.profile_image
                     chat_dict["other_member_phone"] = other_user.phone
                     chat_dict["other_member_last_seen"] = other_user.last_seen
+                    chat_dict["other_member_status"] = other_user.status
                     
         latest_message = db.query(Message).filter(Message.chat_id == chat.id).order_by(Message.created_at.desc()).first()
         chat_dict["last_message_at"] = latest_message.created_at if latest_message else chat.created_at
@@ -265,7 +314,7 @@ async def add_member(chat_id: str, payload: ChatMemberAdd, db: Session = Depends
         ChatMember.chat_id == chat_id, ChatMember.user_id == payload.user_id
     ).first()
     if existing:
-        raise HTTPException(status_code=400, detail="User is already a member of this chat")
+        return existing
 
     membership = ChatMember(chat_id=chat_id, user_id=payload.user_id, role=payload.role)
     db.add(membership)

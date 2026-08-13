@@ -12,6 +12,7 @@ from app.models.prayer_request import PrayerRequest
 from app.models.prayer_response import PrayerResponse
 from app.models.refresh_token import RefreshToken
 from app.models.call import ScheduledCall
+from app.models.blocked_user import BlockedUser
 
 target_metadata = Base.metadata
 
