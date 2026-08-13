@@ -204,6 +204,18 @@ def me(current_user: dict = Depends(get_current_user), db: Session = Depends(get
     return user
 
 
+@router.post("/auth/presence")
+def update_presence(current_user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Updates the user's last_seen timestamp to now."""
+    user_id = current_user.get("sub")
+    user = db.query(User).filter(User.id == user_id).first()
+    if user:
+        from sqlalchemy.sql import func
+        user.last_seen = func.now()
+        db.commit()
+    return {"status": "ok"}
+
+
 @router.post("/auth/delete-account")
 def delete_account(current_user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
     """Deletes the current user and all associated refresh tokens."""
@@ -243,6 +255,20 @@ def update_profile(payload: UserUpdate, current_user: dict = Depends(get_current
     db.commit()
     db.refresh(user)
     return user
+
+
+@router.put("/auth/me/device_token")
+def update_device_token(payload: __import__('app.schemas.user', fromlist=['DeviceTokenUpdate']).DeviceTokenUpdate, current_user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Updates the current authenticated user's FCM device token."""
+    user_id = current_user.get("sub")
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    user.device_token = payload.device_token
+    db.add(user)
+    db.commit()
+    return {"status": "ok"}
 
 
 @router.get("/auth/users/search", response_model=UserOut)

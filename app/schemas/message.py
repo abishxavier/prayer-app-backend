@@ -15,6 +15,9 @@ class MessageOut(BaseModel):
     sender_id: str
     content: str
     message_type: MessageType
+    is_edited: bool = False
+    is_deleted: bool = False
+    is_read: bool = False
     created_at: datetime
     sender_name: Optional[str] = None
     sender_image: Optional[str] = None
@@ -22,3 +25,7 @@ class MessageOut(BaseModel):
 
     class Config:
         from_attributes = True
+
+class MessageUpdate(BaseModel):
+    content: Optional[str] = None
+    is_deleted: Optional[bool] = None

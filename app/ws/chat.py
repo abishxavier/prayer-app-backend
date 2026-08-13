@@ -79,29 +79,18 @@ async def chat_websocket(websocket: WebSocket, chat_id: str, token: str = Query(
         try:
             while True:
                 data = await websocket.receive_json()
-                content = data.get("content")
-                if not content:
-                    continue
-
-                message = Message(
-                    chat_id=chat_id,
-                    sender_id=user.id,
-                    content=content,
-                )
-                db.add(message)
-                db.commit()
-                db.refresh(message)
-
-                await manager.broadcast(chat_id, {
-                    "type": "message",
-                    "data": {
-                        "id": str(message.id),
-                        "chat_id": str(chat_id),
-                        "sender_id": str(user.id),
-                        "content": message.content,
-                        "created_at": message.created_at.isoformat(),
-                    },
-                })
+                type_ = data.get("type")
+                
+                if type_ == "typing":
+                    await manager.broadcast(chat_id, {
+                        "type": "typing",
+                        "user_id": str(user.id)
+                    }, exclude_websocket=websocket)
+                elif type_ == "stop_typing":
+                    await manager.broadcast(chat_id, {
+                        "type": "stop_typing",
+                        "user_id": str(user.id)
+                    }, exclude_websocket=websocket)
 
         except WebSocketDisconnect:
             pass

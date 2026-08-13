@@ -18,6 +18,8 @@ class ChatOut(BaseModel):
     created_at: datetime
     other_member_name: Optional[str] = None
     other_member_image: Optional[str] = None
+    other_member_last_seen: Optional[datetime] = None
+    last_message_at: Optional[datetime] = None
 
     class Config:
         from_attributes = True
@@ -34,6 +36,9 @@ class ChatMemberOut(BaseModel):
     user_id: str
     role: MemberRole
     joined_at: datetime
+    user_name: Optional[str] = None
+    user_phone: Optional[str] = None
+    user_profile_image: Optional[str] = None
 
     class Config:
         from_attributes = True
