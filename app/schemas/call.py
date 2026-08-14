@@ -51,3 +51,27 @@ class CallLogOut(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+class MeetingIntentionCreate(BaseModel):
+    intention: str
+    is_private: Optional[bool] = False
+
+class MeetingIntentionUpdate(BaseModel):
+    is_featured: Optional[bool] = None
+    is_prayed: Optional[bool] = None
+
+class MeetingIntentionOut(BaseModel):
+    id: str
+    room_name: str
+    user_id: str
+    user_name: str
+    user_image: Optional[str] = None
+    intention: str
+    is_private: bool = False
+    is_featured: bool = False
+    is_prayed: bool = False
+    created_at: datetime
+
+    class Config:
+        from_attributes = True

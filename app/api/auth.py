@@ -218,19 +218,49 @@ def update_presence(current_user: dict = Depends(get_current_user), db: Session 
 
 @router.post("/auth/delete-account")
 def delete_account(current_user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
-    """Deletes the current user and all associated refresh tokens."""
+    """Deletes the current user and cascades all related data safely."""
+    from app.models.blocked_user import BlockedUser
+    from app.models.chat_member import ChatMember
+    from app.models.message import Message
+    from app.models.prayer_request import PrayerRequest
+    from app.models.prayer_response import PrayerResponse
+    from app.models.call import ScheduledCall, CallLog
+    from app.models.chat import Chat, ChatType
+
     user_id = current_user.get("sub")
     if not user_id:
         raise HTTPException(status_code=401, detail="Invalid auth token")
 
-    # Delete all refresh tokens
-    db.query(RefreshToken).filter(RefreshToken.user_id == user_id).delete()
+    try:
+        # 1. Delete refresh tokens
+        db.query(RefreshToken).filter(RefreshToken.user_id == user_id).delete()
 
-    # Delete user record
-    db.query(User).filter(User.id == user_id).delete()
+        # 2. Delete blocked user relationships
+        db.query(BlockedUser).filter((BlockedUser.user_id == user_id) | (BlockedUser.blocked_user_id == user_id)).delete()
 
-    db.commit()
-    return {"status": "ok", "message": "Account successfully deleted"}
+        # 3. Delete prayer responses and requests
+        db.query(PrayerResponse).filter(PrayerResponse.user_id == user_id).delete()
+        db.query(PrayerRequest).filter(PrayerRequest.user_id == user_id).delete()
+
+        # 4. Delete call logs and scheduled calls
+        db.query(CallLog).filter((CallLog.caller_id == user_id) | (CallLog.receiver_id == user_id)).delete()
+        db.query(ScheduledCall).filter(ScheduledCall.host_id == user_id).delete()
+
+        # 5. Delete sent messages
+        db.query(Message).filter(Message.sender_id == user_id).delete()
+
+        # 6. Delete chat memberships and direct chats created by user
+        db.query(ChatMember).filter(ChatMember.user_id == user_id).delete()
+        db.query(Chat).filter(Chat.created_by == user_id, Chat.type == ChatType.direct).delete()
+
+        # 7. Delete user record
+        db.query(User).filter(User.id == user_id).delete()
+
+        db.commit()
+        return {"status": "ok", "message": "Account successfully deleted"}
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Failed to delete account: {str(e)}")
 
 
 @router.put("/auth/me", response_model=UserOut)

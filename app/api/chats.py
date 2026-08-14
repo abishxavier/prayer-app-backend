@@ -162,8 +162,58 @@ async def update_chat(chat_id: str, payload: ChatUpdate, db: Session = Depends(g
     if chat.type != ChatType.direct and chat.only_admins_can_edit_info and not is_admin:
         raise HTTPException(status_code=403, detail="Only admins can edit this group info")
 
-    if payload.name is not None:
-        chat.name = payload.name
+    actor = db.query(User).filter(User.id == user_id).first()
+    actor_name = actor.name if actor else "Member"
+
+    if chat.type != ChatType.direct and chat.type != "direct":
+        if payload.name is not None and payload.name != chat.name:
+            chat.name = payload.name
+            sys_content = f"{actor_name} changed the group subject to \"{payload.name}\""
+            sys_msg = Message(chat_id=chat_id, sender_id=user_id, content=sys_content, message_type=MessageType.system)
+            db.add(sys_msg)
+            db.commit()
+            try:
+                await manager.broadcast(chat_id, {
+                    "type": "new_message",
+                    "data": {
+                        "id": str(sys_msg.id),
+                        "chat_id": chat_id,
+                        "sender_id": user_id,
+                        "content": sys_content,
+                        "message_type": "system",
+                        "sender_name": actor_name,
+                        "created_at": sys_msg.created_at.isoformat() if sys_msg.created_at else None,
+                    }
+                })
+            except Exception:
+                pass
+        elif payload.group_image is not None and payload.group_image != chat.group_image:
+            chat.group_image = payload.group_image
+            sys_content = f"{actor_name} changed the group profile photo"
+            sys_msg = Message(chat_id=chat_id, sender_id=user_id, content=sys_content, message_type=MessageType.system)
+            db.add(sys_msg)
+            db.commit()
+            try:
+                await manager.broadcast(chat_id, {
+                    "type": "new_message",
+                    "data": {
+                        "id": str(sys_msg.id),
+                        "chat_id": chat_id,
+                        "sender_id": user_id,
+                        "content": sys_content,
+                        "message_type": "system",
+                        "sender_name": actor_name,
+                        "created_at": sys_msg.created_at.isoformat() if sys_msg.created_at else None,
+                    }
+                })
+            except Exception:
+                pass
+        elif payload.name is not None:
+            chat.name = payload.name
+    else:
+        if payload.name is not None:
+            chat.name = payload.name
+
     if payload.description is not None:
         chat.description = payload.description
     if payload.group_image is not None:
@@ -340,7 +390,33 @@ async def list_my_chats(db: Session = Depends(get_db), current_user: dict = Depe
         result.append(chat_dict)
         
     result.sort(key=lambda x: x["last_message_at"], reverse=True)
-    return result
+
+    # Deduplicate direct chats by other member ID and phone number to never show duplicate contacts
+    deduped_result = []
+    seen_direct_keys = set()
+
+    for item in result:
+        is_group = (item["type"] == ChatType.group or item["type"] == "group" or getattr(item["type"], "value", "") == "group")
+        if not is_group:
+            other_id = item.get("other_member_id")
+            other_phone = item.get("other_member_phone")
+            clean_phone = "".join(c for c in (other_phone or "") if c.isdigit()) if other_phone else None
+            
+            # Key by other user id or cleaned phone
+            key_id = f"user_{other_id}" if other_id else None
+            key_phone = f"phone_{clean_phone[-10:]}" if clean_phone and len(clean_phone) >= 7 else None
+
+            if (key_id and key_id in seen_direct_keys) or (key_phone and key_phone in seen_direct_keys):
+                continue
+
+            if key_id:
+                seen_direct_keys.add(key_id)
+            if key_phone:
+                seen_direct_keys.add(key_phone)
+
+        deduped_result.append(item)
+
+    return deduped_result
 
 
 @router.post("/chats/{chat_id}/members", response_model=ChatMemberOut)
@@ -364,6 +440,39 @@ async def add_member(chat_id: str, payload: ChatMemberAdd, db: Session = Depends
     db.add(membership)
     db.commit()
     db.refresh(membership)
+
+    actor = db.query(User).filter(User.id == user_id).first()
+    target = db.query(User).filter(User.id == payload.user_id).first()
+    actor_name = actor.name if actor else "Member"
+    target_name = target.name if target else "Member"
+    sys_content = f"{actor_name} added {target_name}"
+
+    sys_msg = Message(
+        chat_id=chat_id,
+        sender_id=user_id,
+        content=sys_content,
+        message_type=MessageType.system,
+    )
+    db.add(sys_msg)
+    db.commit()
+    db.refresh(sys_msg)
+
+    try:
+        await manager.broadcast(chat_id, {
+            "type": "new_message",
+            "data": {
+                "id": str(sys_msg.id),
+                "chat_id": chat_id,
+                "sender_id": user_id,
+                "content": sys_content,
+                "message_type": "system",
+                "sender_name": actor_name,
+                "created_at": sys_msg.created_at.isoformat() if sys_msg.created_at else None,
+            }
+        })
+    except Exception:
+        pass
+
     return membership
 
 
@@ -385,6 +494,41 @@ async def update_member_role(chat_id: str, target_user_id: str, payload: ChatMem
 
     target_membership.role = payload.role
     db.commit()
+
+    actor = db.query(User).filter(User.id == user_id).first()
+    target = db.query(User).filter(User.id == target_user_id).first()
+    actor_name = actor.name if actor else "Admin"
+    target_name = target.name if target else "Member"
+
+    is_new_admin = (payload.role == MemberRole.admin or payload.role == "admin" or getattr(payload.role, 'value', '') == "admin")
+    sys_content = f"{actor_name} made {target_name} an admin 👑" if is_new_admin else f"{actor_name} dismissed {target_name} as admin"
+
+    sys_msg = Message(
+        chat_id=chat_id,
+        sender_id=user_id,
+        content=sys_content,
+        message_type=MessageType.system,
+    )
+    db.add(sys_msg)
+    db.commit()
+    db.refresh(sys_msg)
+
+    try:
+        await manager.broadcast(chat_id, {
+            "type": "new_message",
+            "data": {
+                "id": str(sys_msg.id),
+                "chat_id": chat_id,
+                "sender_id": user_id,
+                "content": sys_content,
+                "message_type": "system",
+                "sender_name": actor_name,
+                "created_at": sys_msg.created_at.isoformat() if sys_msg.created_at else None,
+            }
+        })
+    except Exception:
+        pass
+
     return {"status": "success", "user_id": target_user_id, "role": payload.role}
 
 
@@ -406,8 +550,41 @@ async def remove_member(chat_id: str, target_user_id: str, db: Session = Depends
     if not target_membership:
         raise HTTPException(status_code=404, detail="Member not found")
 
+    actor = db.query(User).filter(User.id == user_id).first()
+    target = db.query(User).filter(User.id == target_user_id).first()
+    actor_name = actor.name if actor else "Member"
+    target_name = target.name if target else "Member"
+    sys_content = f"{target_name} left the group" if target_user_id == user_id else f"{actor_name} removed {target_name}"
+
     db.delete(target_membership)
     db.commit()
+
+    sys_msg = Message(
+        chat_id=chat_id,
+        sender_id=user_id,
+        content=sys_content,
+        message_type=MessageType.system,
+    )
+    db.add(sys_msg)
+    db.commit()
+    db.refresh(sys_msg)
+
+    try:
+        await manager.broadcast(chat_id, {
+            "type": "new_message",
+            "data": {
+                "id": str(sys_msg.id),
+                "chat_id": chat_id,
+                "sender_id": user_id,
+                "content": sys_content,
+                "message_type": "system",
+                "sender_name": actor_name,
+                "created_at": sys_msg.created_at.isoformat() if sys_msg.created_at else None,
+            }
+        })
+    except Exception:
+        pass
+
     return {"status": "success", "message": "Member removed"}
 
 
@@ -461,7 +638,7 @@ async def get_messages(chat_id: str, skip: int = 0, limit: int = 50, db: Session
             "id": msg.id,
             "chat_id": msg.chat_id,
             "sender_id": msg.sender_id,
-            "content": msg.content if not msg.is_deleted else "This message was deleted",
+            "content": msg.content if not msg.is_deleted else (msg.content if ("deleted by admin" in (msg.content or "")) else "This message was deleted"),
             "message_type": msg.message_type,
             "is_edited": msg.is_edited,
             "is_deleted": msg.is_deleted,
@@ -608,18 +785,25 @@ async def delete_message(chat_id: str, message_id: str, db: Session = Depends(ge
     if message.sender_id != user_id and not is_admin:
         raise HTTPException(status_code=403, detail="Only sender or admin can delete this message")
 
+    deleted_by_admin = (message.sender_id != user_id and is_admin)
     message.is_deleted = True
+    message.content = "This message was deleted by admin" if deleted_by_admin else "This message was deleted"
     db.commit()
     
     try:
         await manager.broadcast(chat_id, {
             "type": "message_deleted",
-            "data": {"id": str(message.id)}
+            "data": {
+                "id": str(message.id),
+                "is_deleted": True,
+                "content": message.content,
+                "deleted_by_admin": deleted_by_admin
+            }
         })
     except Exception:
         pass
     
-    return {"status": "deleted"}
+    return {"status": "deleted", "content": message.content, "deleted_by_admin": deleted_by_admin}
 
 
 @router.post("/chats/{chat_id}/read")

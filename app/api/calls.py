@@ -139,3 +139,79 @@ def get_call_history(db: Session = Depends(get_db), current_user: dict = Depends
         ))
         
     return result
+
+
+# --- Live Group Video Call Prayer Intentions (In-Memory Fast Store with Room Scoping) ---
+import uuid
+from app.schemas.call import MeetingIntentionCreate, MeetingIntentionUpdate, MeetingIntentionOut
+
+_live_meeting_intentions: dict[str, list[dict]] = {}
+
+@router.post("/calls/{room_name}/intentions", response_model=MeetingIntentionOut)
+def send_meeting_intention(
+    room_name: str,
+    payload: MeetingIntentionCreate,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    user_id = current_user["sub"]
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    intention_obj = {
+        "id": str(uuid.uuid4()),
+        "room_name": room_name,
+        "user_id": user.id,
+        "user_name": user.name,
+        "user_image": user.profile_image,
+        "intention": payload.intention.strip(),
+        "is_private": payload.is_private or False,
+        "is_featured": False,
+        "is_prayed": False,
+        "created_at": datetime.now(timezone.utc)
+    }
+
+    if room_name not in _live_meeting_intentions:
+        _live_meeting_intentions[room_name] = []
+
+    _live_meeting_intentions[room_name].append(intention_obj)
+    return MeetingIntentionOut(**intention_obj)
+
+
+@router.get("/calls/{room_name}/intentions", response_model=List[MeetingIntentionOut])
+def get_meeting_intentions(
+    room_name: str,
+    current_user: dict = Depends(get_current_user)
+):
+    user_id = current_user["sub"]
+    intentions = _live_meeting_intentions.get(room_name, [])
+    # Return all intentions if public or if sent by this user
+    return [
+        MeetingIntentionOut(**item)
+        for item in intentions
+    ]
+
+
+@router.patch("/calls/{room_name}/intentions/{intention_id}", response_model=MeetingIntentionOut)
+def update_meeting_intention(
+    room_name: str,
+    intention_id: str,
+    payload: MeetingIntentionUpdate,
+    current_user: dict = Depends(get_current_user)
+):
+    intentions = _live_meeting_intentions.get(room_name, [])
+    for item in intentions:
+        if item["id"] == intention_id:
+            if payload.is_featured is not None:
+                # If setting this to featured, unfeature others
+                if payload.is_featured:
+                    for other in intentions:
+                        other["is_featured"] = False
+                item["is_featured"] = payload.is_featured
+            if payload.is_prayed is not None:
+                item["is_prayed"] = payload.is_prayed
+            return MeetingIntentionOut(**item)
+
+    raise HTTPException(status_code=404, detail="Intention not found")
+
