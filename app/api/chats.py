@@ -143,7 +143,8 @@ async def get_chat(chat_id: str, db: Session = Depends(get_db), current_user: di
                 chat_dict["other_member_image"] = other_user.profile_image
                 chat_dict["other_member_phone"] = other_user.phone
                 chat_dict["other_member_last_seen"] = other_user.last_seen
-                chat_dict["other_member_status"] = other_user.status
+                is_live_online = manager.is_online(str(other_user.id))
+                chat_dict["other_member_status"] = "online" if is_live_online else (other_user.status or "offline")
 
     return chat_dict
 
@@ -382,7 +383,8 @@ async def list_my_chats(db: Session = Depends(get_db), current_user: dict = Depe
                     chat_dict["other_member_image"] = other_user.profile_image
                     chat_dict["other_member_phone"] = other_user.phone
                     chat_dict["other_member_last_seen"] = other_user.last_seen
-                    chat_dict["other_member_status"] = other_user.status
+                    is_live_online = manager.is_online(str(other_user.id))
+                    chat_dict["other_member_status"] = "online" if is_live_online else (other_user.status or "offline")
                     
         latest_message = latest_msg_map.get(chat.id)
         chat_dict["last_message_at"] = latest_message.created_at if latest_message else chat.created_at
@@ -492,6 +494,10 @@ async def update_member_role(chat_id: str, target_user_id: str, payload: ChatMem
     if not target_membership:
         raise HTTPException(status_code=404, detail="Member not found in group")
 
+    # Prevent dismissing the group creator
+    if chat and chat.created_by == target_user_id and payload.role != MemberRole.admin and payload.role != "admin":
+        raise HTTPException(status_code=400, detail="The group creator cannot be dismissed as admin")
+
     target_membership.role = payload.role
     db.commit()
 
@@ -515,7 +521,7 @@ async def update_member_role(chat_id: str, target_user_id: str, payload: ChatMem
 
     try:
         await manager.broadcast(chat_id, {
-            "type": "new_message",
+            "type": "message",
             "data": {
                 "id": str(sys_msg.id),
                 "chat_id": chat_id,
@@ -529,7 +535,8 @@ async def update_member_role(chat_id: str, target_user_id: str, payload: ChatMem
     except Exception:
         pass
 
-    return {"status": "success", "user_id": target_user_id, "role": payload.role}
+    role_val = payload.role.value if hasattr(payload.role, 'value') else str(payload.role)
+    return {"status": "success", "user_id": target_user_id, "role": role_val}
 
 
 @router.delete("/chats/{chat_id}/members/{target_user_id}")
@@ -726,7 +733,20 @@ async def send_message(chat_id: str, payload: MessageCreate, db: Session = Depen
     except Exception:
         pass
 
-    return message
+    return {
+        "id": str(message.id),
+        "chat_id": str(message.chat_id),
+        "sender_id": str(message.sender_id),
+        "content": message.content,
+        "message_type": message.message_type,
+        "is_edited": message.is_edited,
+        "is_deleted": message.is_deleted,
+        "is_read": message.is_read,
+        "created_at": message.created_at,
+        "sender_name": user.name if user else None,
+        "sender_image": user.profile_image if user else None,
+        "sender_phone": user.phone if user else None,
+    }
 
 
 @router.put("/chats/{chat_id}/messages/{message_id}", response_model=MessageOut)

@@ -238,7 +238,10 @@ def delete_account(current_user: dict = Depends(get_current_user), db: Session =
         # 2. Delete blocked user relationships
         db.query(BlockedUser).filter((BlockedUser.user_id == user_id) | (BlockedUser.blocked_user_id == user_id)).delete()
 
-        # 3. Delete prayer responses and requests
+        # 3. Delete prayer responses by user AND prayer responses to user's prayer requests
+        user_prayer_req_ids = [r.id for r in db.query(PrayerRequest.id).filter(PrayerRequest.user_id == user_id).all()]
+        if user_prayer_req_ids:
+            db.query(PrayerResponse).filter(PrayerResponse.request_id.in_(user_prayer_req_ids)).delete(synchronize_session=False)
         db.query(PrayerResponse).filter(PrayerResponse.user_id == user_id).delete()
         db.query(PrayerRequest).filter(PrayerRequest.user_id == user_id).delete()
 
@@ -249,11 +252,29 @@ def delete_account(current_user: dict = Depends(get_current_user), db: Session =
         # 5. Delete sent messages
         db.query(Message).filter(Message.sender_id == user_id).delete()
 
-        # 6. Delete chat memberships and direct chats created by user
+        # 6. Delete chat memberships
         db.query(ChatMember).filter(ChatMember.user_id == user_id).delete()
-        db.query(Chat).filter(Chat.created_by == user_id, Chat.type == ChatType.direct).delete()
 
-        # 7. Delete user record
+        # 7. Handle direct chats created by user
+        direct_chats = db.query(Chat).filter(Chat.created_by == user_id, (Chat.type == ChatType.direct) | (Chat.type == "direct")).all()
+        for dc in direct_chats:
+            db.query(Message).filter(Message.chat_id == dc.id).delete()
+            db.query(ChatMember).filter(ChatMember.chat_id == dc.id).delete()
+            db.delete(dc)
+
+        # 8. Handle group chats created by user: reassign created_by or delete if empty
+        group_chats = db.query(Chat).filter(Chat.created_by == user_id).all()
+        for gc in group_chats:
+            remaining_member = db.query(ChatMember).filter(ChatMember.chat_id == gc.id).first()
+            if remaining_member:
+                gc.created_by = remaining_member.user_id
+                from app.models.chat_member import MemberRole
+                remaining_member.role = MemberRole.admin
+            else:
+                db.query(Message).filter(Message.chat_id == gc.id).delete()
+                db.delete(gc)
+
+        # 9. Delete user record
         db.query(User).filter(User.id == user_id).delete()
 
         db.commit()
