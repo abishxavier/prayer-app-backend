@@ -5,6 +5,7 @@ from app.api.chats import router as chats_router
 from app.api.prayers import router as prayers_router
 from app.api.calls import router as calls_router
 from app.api.testimonies import router as testimonies_router
+from app.api.gallery import router as gallery_router
 from app.ws.chat import router as ws_chat_router
 from app.db.session import Base, engine
 import app.models.testimony  # noqa: F401 — registers Testimony with Base.metadata
@@ -12,6 +13,7 @@ import app.models.call        # noqa: F401 — registers ScheduledCall, CallLog
 import app.models.user        # noqa: F401 — registers User
 import app.models.chat        # noqa: F401 — registers Chat, ChatMember
 import app.models.message     # noqa: F401 — registers Message
+import app.models.gallery     # noqa: F401 — registers GalleryItem
 
 # Ensure all tables are created
 Base.metadata.create_all(bind=engine)
@@ -45,6 +47,7 @@ app.include_router(chats_router)
 app.include_router(prayers_router)
 app.include_router(calls_router)
 app.include_router(testimonies_router)
+app.include_router(gallery_router)
 app.include_router(ws_chat_router)
 
 
