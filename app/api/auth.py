@@ -335,6 +335,57 @@ def search_user_by_phone(phone: str, db: Session = Depends(get_db), current_user
     return user
 
 
+@router.post("/auth/users/match-phones")
+def match_phones(
+    payload: dict,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """Given a list of phone numbers (from device contacts), returns which ones
+    are registered JIPF members. Used for the WhatsApp-style 'Contacts on JIPF' screen.
+
+    Request body: { "phones": ["+919876543210", "9876543210", ...] }
+    Response: list of { id, name, phone, profile_image } for matched users
+    """
+    import re
+
+    raw_phones: list = payload.get("phones", [])
+    if not raw_phones:
+        return []
+
+    # Normalize all submitted numbers — strip non-digits, keep last 10 digits for matching
+    def normalize(p: str) -> str:
+        digits = re.sub(r'\D', '', p)
+        return digits[-10:] if len(digits) >= 10 else digits
+
+    normalized_map: dict[str, str] = {}  # normalized -> original
+    for p in raw_phones:
+        n = normalize(p)
+        if n:
+            normalized_map[n] = p
+
+    # Fetch all users who have a phone set (excluding current user)
+    caller_id = current_user.get("sub")
+    all_users = db.query(User).filter(
+        User.phone.isnot(None),
+        User.id != caller_id,
+    ).all()
+
+    matched = []
+    for user in all_users:
+        user_normalized = normalize(user.phone or "")
+        if user_normalized and user_normalized in normalized_map:
+            matched.append({
+                "id": user.id,
+                "name": user.name,
+                "phone": user.phone,
+                "profile_image": user.profile_image,
+                "username": user.username,
+            })
+
+    return matched
+
+
 @router.get("/auth/users/{user_id}", response_model=UserOut)
 def get_user_profile(user_id: str, db: Session = Depends(get_db), current_user: dict = Depends(get_current_user)):
     """Gets another user's profile, respecting visibility settings."""

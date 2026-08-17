@@ -724,10 +724,11 @@ async def send_message(chat_id: str, payload: MessageCreate, db: Session = Depen
             member_user = db.query(User).filter(User.id == member.user_id).first()
             if member_user and member_user.device_token:
                 title = f"{user.name if user else 'Someone'} ({chat_name})" if chat and getattr(chat.type, 'value', '') == 'group' else (user.name if user else 'New Message')
+                body_preview = "📷 Photo" if (message.content and message.content.startswith("data:image")) else ("🎙️ Voice Note" if (message.content and message.content.startswith("🎙️")) else (message.content if len(message.content) < 100 else message.content[:97] + "..."))
                 send_push_notification(
                     token=member_user.device_token,
                     title=title,
-                    body=message.content,
+                    body=body_preview,
                     data={"chat_id": chat_id, "type": "message"}
                 )
     except Exception:
