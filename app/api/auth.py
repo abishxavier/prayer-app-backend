@@ -355,24 +355,38 @@ def get_user_profile(user_id: str, db: Session = Depends(get_db), current_user: 
 
 @router.get("/auth/rtc-token")
 def get_rtc_token(channelName: str, current_user: dict = Depends(get_current_user)):
-    """Generates an Agora RTC token for the specified channel name."""
+    """Generates an Agora RTC token for the specified channel name.
+    
+    Two modes:
+    - App ID-only mode (AGORA_APP_CERTIFICATE is empty): returns token="" which is valid
+      ONLY when the Agora Console has 'Primary Certificate' disabled for this App ID.
+    - Certificate mode (AGORA_APP_CERTIFICATE is set): returns a signed token valid 24h.
+    
+    To enable Certificate mode: go to https://console.agora.io → your project → 
+    enable Primary Certificate → set AGORA_APP_CERTIFICATE env var on Render.
+    """
     app_id = AGORA_APP_ID if AGORA_APP_ID else "95d9ae080e1f45a6b669e1f7ceed021e"
     
     if not AGORA_APP_CERTIFICATE:
-        # App ID only mode (Testing mode without certificate requirement)
-        return {"token": "", "appId": app_id}
+        # App ID-only mode: empty string token is intentional and valid in this mode.
+        # Requires Primary Certificate to be DISABLED in Agora Console for this App ID.
+        return {"token": "", "appId": app_id, "mode": "app_id_only"}
     
     try:
-        # Generate token (Uid = 0 allows any uid, Role = 1 is Publisher, expires in 24 hours)
+        # Certificate mode: generate a signed RTC token
+        # Uid=0 lets Agora assign random UIDs, Role=1 is Publisher, expires in 24h
         token = RtcTokenBuilder.buildTokenWithUid(
             app_id,
             AGORA_APP_CERTIFICATE,
             channelName,
-            0,
-            1,
-            86400
+            0,      # uid=0: server assigns a random uid
+            1,      # role=Publisher
+            86400   # expiry: 24 hours
         )
-        return {"token": token, "appId": app_id}
+        return {"token": token, "appId": app_id, "mode": "certificate"}
     except Exception as e:
-        print(f"Token generation error, falling back to empty token: {e}")
-        return {"token": "", "appId": app_id}
+        # Do NOT silently swallow — raise so the client shows an error
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to generate Agora token: {str(e)}. Check AGORA_APP_CERTIFICATE env var."
+        )
