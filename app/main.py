@@ -7,6 +7,7 @@ from app.api.calls import router as calls_router
 from app.api.testimonies import router as testimonies_router
 from app.api.gallery import router as gallery_router
 from app.api.monthly_plans import router as monthly_plans_router
+from app.api.media import router as media_router
 from app.ws.chat import router as ws_chat_router
 from app.db.session import Base, engine
 import app.models.testimony  # noqa: F401 — registers Testimony with Base.metadata
@@ -51,6 +52,7 @@ app.include_router(calls_router)
 app.include_router(testimonies_router)
 app.include_router(gallery_router)
 app.include_router(monthly_plans_router, prefix="/plans", tags=["Monthly Plans"])
+app.include_router(media_router)
 app.include_router(ws_chat_router)
 
 

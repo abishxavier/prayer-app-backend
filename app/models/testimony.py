@@ -13,6 +13,7 @@ class Testimony(Base):
     user_image = Column(Text, nullable=True)
     title = Column(String, nullable=False)
     content = Column(Text, nullable=False)
+    image_url = Column(Text, nullable=True)
     likes = Column(Integer, default=0)
     shares = Column(Integer, default=0)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))

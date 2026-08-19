@@ -6,7 +6,7 @@ from app.db.session import get_db
 from app.core.security import get_current_user
 from app.models.testimony import Testimony
 from app.models.user import User
-from app.schemas.testimony import TestimonyCreate, TestimonyOut
+from app.schemas.testimony import TestimonyCreate, TestimonyUpdate, TestimonyOut
 
 router = APIRouter()
 
@@ -33,6 +33,7 @@ def create_testimony(
         user_image=user.profile_image,
         title=title,
         content=content,
+        image_url=payload.image_url,
         likes=0,
         shares=0
     )
@@ -50,6 +51,43 @@ def get_testimonies(
     # Return all testimonies sorted with newest first
     testimonies = db.query(Testimony).order_by(Testimony.created_at.desc()).all()
     return testimonies
+
+
+@router.put("/testimonies/{testimony_id}", response_model=TestimonyOut)
+def update_testimony(
+    testimony_id: str,
+    payload: TestimonyUpdate,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    user_id = current_user["sub"]
+    testimony = db.query(Testimony).filter(Testimony.id == testimony_id).first()
+    if not testimony:
+        raise HTTPException(status_code=404, detail="Testimony not found")
+
+    # Author check: only creator can edit their testimony
+    if testimony.user_id != user_id:
+        raise HTTPException(status_code=403, detail="You can only edit your own testimony")
+
+    if payload.title is not None:
+        title = payload.title.strip()
+        if not title:
+            raise HTTPException(status_code=400, detail="Title cannot be empty")
+        testimony.title = title
+
+    if payload.content is not None:
+        content = payload.content.strip()
+        if not content:
+            raise HTTPException(status_code=400, detail="Content cannot be empty")
+        testimony.content = content
+
+    if payload.image_url is not None:
+        # If passed as empty string or "CLEAR", set to None, else store URL/base64
+        testimony.image_url = None if payload.image_url in ("", "CLEAR") else payload.image_url
+
+    db.commit()
+    db.refresh(testimony)
+    return testimony
 
 
 @router.post("/testimonies/{testimony_id}/like", response_model=TestimonyOut)
