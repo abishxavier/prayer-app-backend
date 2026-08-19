@@ -49,9 +49,8 @@ def schedule_call(payload: ScheduledCallCreate, db: Session = Depends(get_db), c
 
 @router.get("/calls/scheduled", response_model=List[ScheduledCallOut])
 def get_scheduled_calls(db: Session = Depends(get_db), current_user: dict = Depends(get_current_user)):
-    # Get all calls from the future or recent past (e.g. up to 1 hour ago)
-    # For simplicity during testing, we'll return all and let frontend filter
-    calls = db.query(ScheduledCall).order_by(ScheduledCall.scheduled_at.asc()).all()
+    # Order by newest created / scheduled first so latest meetings appear at the top
+    calls = db.query(ScheduledCall).order_by(ScheduledCall.created_at.desc(), ScheduledCall.scheduled_at.desc()).all()
     
     result = []
     for call in calls:

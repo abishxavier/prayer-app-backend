@@ -404,6 +404,8 @@ def get_user_profile(user_id: str, db: Session = Depends(get_db), current_user: 
     return user
 
 
+import time
+
 @router.get("/auth/rtc-token")
 def get_rtc_token(channelName: str, current_user: dict = Depends(get_current_user)):
     """Generates an Agora RTC token for the specified channel name.
@@ -424,15 +426,18 @@ def get_rtc_token(channelName: str, current_user: dict = Depends(get_current_use
         return {"token": "", "appId": app_id, "mode": "app_id_only"}
     
     try:
+        # Expiry is in seconds since Unix Epoch (1/1/1970). Must be current time + duration!
+        privilege_expired_ts = int(time.time()) + 86400  # Valid for 24 hours
+
         # Certificate mode: generate a signed RTC token
-        # Uid=0 lets Agora assign random UIDs, Role=1 is Publisher, expires in 24h
+        # Uid=0 lets Agora assign random UIDs, Role=1 is Publisher
         token = RtcTokenBuilder.buildTokenWithUid(
             app_id,
             AGORA_APP_CERTIFICATE,
             channelName,
             0,      # uid=0: server assigns a random uid
             1,      # role=Publisher
-            86400   # expiry: 24 hours
+            privilege_expired_ts
         )
         return {"token": token, "appId": app_id, "mode": "certificate"}
     except Exception as e:
