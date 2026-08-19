@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
 from sqlalchemy.orm import Session
 from typing import List, Optional
+from datetime import datetime, timezone
 from app.ws.manager import manager
 
 from app.db.session import get_db
@@ -336,6 +337,17 @@ async def list_my_chats(db: Session = Depends(get_db), current_user: dict = Depe
     ).all()
     latest_msg_map = {m.chat_id: m for m in latest_messages}
 
+    # 6. Fetch unread counts for each chat in bulk
+    unread_counts = db.query(
+        Message.chat_id,
+        func.count(Message.id).label("cnt")
+    ).filter(
+        Message.chat_id.in_(chat_ids),
+        Message.sender_id != user_id,
+        Message.is_read == False
+    ).group_by(Message.chat_id).all()
+    unread_map = {str(row.chat_id): row.cnt for row in unread_counts}
+
     result = []
     
     for chat in chats:
@@ -345,6 +357,19 @@ async def list_my_chats(db: Session = Depends(get_db), current_user: dict = Depe
             if m.user_id == user_id:
                 my_role = m.role.value if hasattr(m.role, 'value') else str(m.role)
                 break
+
+        latest_message = latest_msg_map.get(chat.id)
+        last_msg_at = latest_message.created_at if latest_message else chat.created_at
+        last_content = None
+        if latest_message:
+            if latest_message.is_deleted:
+                last_content = "This message was deleted"
+            elif latest_message.content and latest_message.content.startswith("data:image"):
+                last_content = "📷 Photo"
+            elif latest_message.content and latest_message.content.startswith("🎙️"):
+                last_content = "🎙️ Voice note"
+            else:
+                last_content = latest_message.content
 
         chat_dict = {
             "id": chat.id,
@@ -367,6 +392,9 @@ async def list_my_chats(db: Session = Depends(get_db), current_user: dict = Depe
             "other_member_phone": None,
             "other_member_last_seen": None,
             "other_member_status": None,
+            "last_message_at": last_msg_at,
+            "last_message_content": last_content,
+            "unread_count": unread_map.get(str(chat.id), 0),
         }
         
         if chat.type == ChatType.direct or chat.type == "direct" or getattr(chat.type, 'value', '') == "direct":
@@ -388,12 +416,17 @@ async def list_my_chats(db: Session = Depends(get_db), current_user: dict = Depe
                     is_live_online = manager.is_online(str(other_user.id))
                     chat_dict["other_member_status"] = "online" if is_live_online else (other_user.status or "offline")
                     
-        latest_message = latest_msg_map.get(chat.id)
-        chat_dict["last_message_at"] = latest_message.created_at if latest_message else chat.created_at
-        
         result.append(chat_dict)
         
-    result.sort(key=lambda x: x["last_message_at"], reverse=True)
+    def _safe_sort_key(item):
+        dt = item.get("last_message_at") or item.get("created_at")
+        if dt is None:
+            return datetime.min.replace(tzinfo=timezone.utc)
+        if getattr(dt, "tzinfo", None) is None:
+            return dt.replace(tzinfo=timezone.utc)
+        return dt
+
+    result.sort(key=_safe_sort_key, reverse=True)
 
     # Deduplicate direct chats by other member ID and phone number to never show duplicate contacts
     deduped_result = []

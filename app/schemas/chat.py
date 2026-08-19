@@ -47,6 +47,8 @@ class ChatOut(BaseModel):
     other_member_last_seen: Optional[datetime] = None
     other_member_status: Optional[str] = None
     last_message_at: Optional[datetime] = None
+    last_message_content: Optional[str] = None
+    unread_count: Optional[int] = 0
 
     class Config:
         from_attributes = True
