@@ -10,6 +10,7 @@ from app.models.chat_member import ChatMember, MemberRole
 from app.models.message import Message
 from app.models.blocked_user import BlockedUser
 from app.models.user import User
+from app.models.call import ScheduledCall
 from app.schemas.chat import (
     ChatCreate, ChatOut, ChatMemberAdd, ChatMemberOut, ChatUpdate, ChatMemberRoleUpdate
 )
@@ -271,7 +272,8 @@ async def delete_chat(chat_id: str, db: Session = Depends(get_db), current_user:
     if not is_admin and chat.type != ChatType.direct:
         raise HTTPException(status_code=403, detail="Only admins can delete this group")
 
-    # Delete members and messages
+    # Delete linked scheduled calls, messages, members and the chat itself
+    db.query(ScheduledCall).filter(ScheduledCall.chat_id == chat_id).delete()
     db.query(Message).filter(Message.chat_id == chat_id).delete()
     db.query(ChatMember).filter(ChatMember.chat_id == chat_id).delete()
     db.query(Chat).filter(Chat.id == chat_id).delete()
