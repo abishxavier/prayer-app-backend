@@ -406,6 +406,7 @@ def get_user_profile(user_id: str, db: Session = Depends(get_db), current_user: 
 
 import time
 import os
+import re
 DEFAULT_AGORA_APP_ID = "95d9ae080e1f45a6b669e1f7ceed021e"
 DEFAULT_AGORA_APP_CERTIFICATE = "bf05946338cd4ab4ab4e8e5009db4213"
 
@@ -415,22 +416,25 @@ def get_rtc_token(channelName: str, current_user: dict = Depends(get_current_use
     app_id = (os.getenv("AGORA_APP_ID", "") or DEFAULT_AGORA_APP_ID).strip()
     app_certificate = (os.getenv("AGORA_APP_CERTIFICATE", "") or DEFAULT_AGORA_APP_CERTIFICATE).strip()
     
+    # Sanitize channel name to ensure strict ASCII alphanumeric compliance
+    sanitized_channel = re.sub(r'[^a-zA-Z0-9_\-]', '_', channelName).strip('_')
+    if not sanitized_channel:
+        sanitized_channel = f"room_{int(time.time())}"
+    
     if not app_certificate:
-        return {"token": "", "appId": app_id, "mode": "app_id_only"}
+        return {"token": "", "appId": app_id, "channelName": sanitized_channel, "mode": "app_id_only"}
     
     try:
         privilege_expired_ts = int(time.time()) + 86400  # Valid for 24 hours
         token = RtcTokenBuilder.buildTokenWithUid(
             app_id,
             app_certificate,
-            channelName,
+            sanitized_channel,
             0,      # uid=0: server assigns a random uid
             1,      # role=Publisher
             privilege_expired_ts
         )
-        return {"token": token, "appId": app_id, "mode": "certificate"}
+        return {"token": token, "appId": app_id, "channelName": sanitized_channel, "mode": "certificate"}
     except Exception as e:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Failed to generate Agora token: {str(e)}"
-        )
+        # Fallback to App ID only if token generator fails
+        return {"token": "", "appId": app_id, "channelName": sanitized_channel, "mode": "app_id_only", "warning": str(e)}
