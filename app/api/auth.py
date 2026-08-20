@@ -449,3 +449,39 @@ def get_rtc_token(channelName: str, current_user: dict = Depends(get_current_use
     except Exception as e:
         # Fallback to App ID only if token generator fails
         return {"token": "", "appId": app_id, "channelName": sanitized_channel, "mode": "app_id_only", "warning": str(e)}
+
+
+@router.get("/auth/agora-debug")
+def agora_debug():
+    """Public diagnostic endpoint to check if Agora App ID and Certificate are configured."""
+    app_id = (os.getenv("AGORA_APP_ID", "") or DEFAULT_AGORA_APP_ID).strip()
+    app_cert = os.getenv("AGORA_APP_CERTIFICATE", "").strip()
+
+    token = ""
+    err = None
+    if app_cert:
+        try:
+            token = RtcTokenBuilder.buildTokenWithUid(
+                app_id,
+                app_cert,
+                "test_room",
+                0,
+                1,
+                int(time.time()) + 86400
+            )
+        except Exception as e:
+            err = str(e)
+
+    return {
+        "agora_app_id_prefix": app_id[:8] + "..." if len(app_id) >= 8 else app_id,
+        "agora_app_id_length": len(app_id),
+        "is_custom_app_id": bool(os.getenv("AGORA_APP_ID")),
+        "certificate_configured": bool(app_cert),
+        "certificate_length": len(app_cert),
+        "certificate_prefix": app_cert[:4] + "..." if len(app_cert) >= 4 else "NOT_SET",
+        "mode": "certificate" if app_cert else "app_id_only",
+        "test_token_generated": bool(token),
+        "test_token_length": len(token),
+        "test_token_prefix": token[:10] if token else "",
+        "token_generation_error": err,
+    }
