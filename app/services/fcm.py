@@ -62,6 +62,8 @@ _init_firebase()
 
 def send_push_notification(token: str, title: str, body: str, data: dict = None):
     if not firebase_admin._apps:
+        _init_firebase()
+    if not firebase_admin._apps:
         logger.warning("Firebase not initialised — skipping push notification.")
         return False
 
