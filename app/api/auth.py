@@ -411,18 +411,18 @@ import re
 # - If AGORA_APP_CERTIFICATE env var is set, tokens are generated (certificate mode).
 # - If NOT set, we return an empty token so the client connects in App ID only mode.
 # DO NOT hardcode the certificate here — a wrong certificate causes errInvalidToken.
+from app.core.agora_token2 import RtcTokenBuilder2
+
 DEFAULT_AGORA_APP_ID = "95d9ae080e1f45a6b669e1f7ceed021e"
 
 @router.get("/auth/rtc-token")
-def get_rtc_token(channelName: str, current_user: dict = Depends(get_current_user)):
-    """Generates an Agora RTC token for the specified channel name.
+def get_rtc_token(channelName: str, uid: int = 0, current_user: dict = Depends(get_current_user)):
+    """Generates an Agora RTC AccessToken2 (Token007) for the specified channel name and UID.
     
     Returns an empty token (App ID only mode) unless AGORA_APP_CERTIFICATE env var
-    is explicitly set. This avoids errInvalidToken when the Agora project is in App
-    ID only mode.
+    is explicitly set.
     """
     app_id = (os.getenv("AGORA_APP_ID", "") or DEFAULT_AGORA_APP_ID).strip()
-    # Only use certificate if explicitly provided via environment variable
     app_certificate = os.getenv("AGORA_APP_CERTIFICATE", "").strip()
     
     # Sanitize channel name to ensure strict ASCII alphanumeric compliance
@@ -431,41 +431,77 @@ def get_rtc_token(channelName: str, current_user: dict = Depends(get_current_use
         sanitized_channel = f"room_{int(time.time())}"
     
     # If no certificate configured, use App ID only mode (empty token)
-    # This is the correct mode when Agora project has no App Certificate enabled
     if not app_certificate:
-        return {"token": "", "appId": app_id, "channelName": sanitized_channel, "mode": "app_id_only"}
+        return {"token": "", "appId": app_id, "channelName": sanitized_channel, "uid": uid, "mode": "app_id_only"}
     
     try:
-        privilege_expired_ts = int(time.time()) + 86400  # Valid for 24 hours
-        token = RtcTokenBuilder.buildTokenWithUid(
+        # AccessToken2 (Token007) is the modern Agora standard for RTC SDK 4.x / 6.x
+        token_v2 = RtcTokenBuilder2.build_token_with_uid(
             app_id,
             app_certificate,
             sanitized_channel,
-            0,      # uid=0: server assigns a random uid
-            1,      # role=Publisher
-            privilege_expired_ts
+            uid,
+            1,  # Publisher
+            86400,
+            86400
         )
-        return {"token": token, "appId": app_id, "channelName": sanitized_channel, "mode": "certificate"}
+        return {
+            "token": token_v2,
+            "token_version": "007",
+            "appId": app_id,
+            "channelName": sanitized_channel,
+            "uid": uid,
+            "mode": "certificate"
+        }
     except Exception as e:
-        # Fallback to App ID only if token generator fails
-        return {"token": "", "appId": app_id, "channelName": sanitized_channel, "mode": "app_id_only", "warning": str(e)}
+        # Fallback to Token006 if Token007 builder fails
+        try:
+            privilege_expired_ts = int(time.time()) + 86400
+            token_v1 = RtcTokenBuilder.buildTokenWithUid(
+                app_id,
+                app_certificate,
+                sanitized_channel,
+                uid,
+                1,
+                privilege_expired_ts
+            )
+            return {
+                "token": token_v1,
+                "token_version": "006",
+                "appId": app_id,
+                "channelName": sanitized_channel,
+                "uid": uid,
+                "mode": "certificate"
+            }
+        except Exception as e2:
+            return {"token": "", "appId": app_id, "channelName": sanitized_channel, "uid": uid, "mode": "app_id_only", "warning": f"{e} / {e2}"}
 
 
 @router.get("/auth/agora-debug")
-def agora_debug():
+def agora_debug(uid: int = 0):
     """Public diagnostic endpoint to check if Agora App ID and Certificate are configured."""
     app_id = (os.getenv("AGORA_APP_ID", "") or DEFAULT_AGORA_APP_ID).strip()
     app_cert = os.getenv("AGORA_APP_CERTIFICATE", "").strip()
 
-    token = ""
+    token_v2 = ""
+    token_v1 = ""
     err = None
     if app_cert:
         try:
-            token = RtcTokenBuilder.buildTokenWithUid(
+            token_v2 = RtcTokenBuilder2.build_token_with_uid(
                 app_id,
                 app_cert,
                 "test_room",
-                0,
+                uid,
+                1,
+                86400,
+                86400
+            )
+            token_v1 = RtcTokenBuilder.buildTokenWithUid(
+                app_id,
+                app_cert,
+                "test_room",
+                uid,
                 1,
                 int(time.time()) + 86400
             )
@@ -480,8 +516,9 @@ def agora_debug():
         "certificate_length": len(app_cert),
         "certificate_prefix": app_cert[:4] + "..." if len(app_cert) >= 4 else "NOT_SET",
         "mode": "certificate" if app_cert else "app_id_only",
-        "test_token_generated": bool(token),
-        "test_token_length": len(token),
-        "test_token_prefix": token[:10] if token else "",
+        "test_token_v2_generated": bool(token_v2),
+        "test_token_v2_prefix": token_v2[:10] if token_v2 else "",
+        "test_token_v1_generated": bool(token_v1),
+        "test_token_v1_prefix": token_v1[:10] if token_v1 else "",
         "token_generation_error": err,
     }
