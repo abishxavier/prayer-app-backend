@@ -411,7 +411,7 @@ import re
 # - If AGORA_APP_CERTIFICATE env var is set, tokens are generated (certificate mode).
 # - If NOT set, we return an empty token so the client connects in App ID only mode.
 # DO NOT hardcode the certificate here — a wrong certificate causes errInvalidToken.
-from app.core.agora_token2 import RtcTokenBuilder2
+from app.core.RtcTokenBuilder2 import RtcTokenBuilder as RtcTokenBuilder2, Role_Publisher
 
 DEFAULT_AGORA_APP_ID = "95d9ae080e1f45a6b669e1f7ceed021e"
 
