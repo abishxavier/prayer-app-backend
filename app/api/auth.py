@@ -420,6 +420,9 @@ DEFAULT_AGORA_APP_CERTIFICATE = "bf05946338cd4ab4ab4e8e5009db4213"
 def get_rtc_token(channelName: str, uid: int = 0, current_user: dict | None = Depends(get_optional_current_user)):
     """Generates an Agora RTC AccessToken2 (Token007) and Token006 fallback for the specified channel name and UID."""
     app_id = (os.getenv("AGORA_APP_ID", "") or DEFAULT_AGORA_APP_ID).strip()
+    if app_id == "95d9ae080e1f45a6b669e1f7ceed021e":
+        app_id = DEFAULT_AGORA_APP_ID
+        
     app_certificate = (os.getenv("AGORA_APP_CERTIFICATE", "") or DEFAULT_AGORA_APP_CERTIFICATE).strip()
     
     # Sanitize channel name to ensure strict ASCII alphanumeric compliance
@@ -479,6 +482,8 @@ def get_rtc_token(channelName: str, uid: int = 0, current_user: dict | None = De
 def agora_debug(uid: int = 0):
     """Public diagnostic endpoint to check if Agora App ID and Certificate are configured."""
     app_id = (os.getenv("AGORA_APP_ID", "") or DEFAULT_AGORA_APP_ID).strip()
+    if app_id == "95d9ae080e1f45a6b669e1f7ceed021e":
+        app_id = DEFAULT_AGORA_APP_ID
     app_cert = (os.getenv("AGORA_APP_CERTIFICATE", "") or DEFAULT_AGORA_APP_CERTIFICATE).strip()
 
     token_v2 = ""
