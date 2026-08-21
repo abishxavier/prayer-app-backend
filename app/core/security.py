@@ -10,6 +10,7 @@ ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24 * 7  # 7 days
 
 security = HTTPBearer()
+optional_security = HTTPBearer(auto_error=False)
 
 
 def verify_firebase_token(id_token: str) -> dict:
@@ -42,3 +43,13 @@ def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(securit
     token = credentials.credentials
     payload = decode_access_token(token)
     return payload
+
+
+def get_optional_current_user(credentials: HTTPAuthorizationCredentials | None = Depends(optional_security)) -> dict | None:
+    """FastAPI dependency for optional auth. Returns user payload or None if token is missing/expired."""
+    if not credentials or not credentials.credentials:
+        return None
+    try:
+        return decode_access_token(credentials.credentials)
+    except Exception:
+        return None

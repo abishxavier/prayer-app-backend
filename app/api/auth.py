@@ -3,7 +3,7 @@ from sqlalchemy.orm import Session
 from fastapi import Depends
 
 from app.db.session import get_db
-from app.core.security import verify_firebase_token, create_access_token, get_current_user
+from app.core.security import verify_firebase_token, create_access_token, get_current_user, get_optional_current_user
 from app.schemas.auth import LoginRequest, LoginResponse, RefreshRequest, RefreshResponse, LogoutRequest
 from app.schemas.user import UserOut, UserUpdate
 from app.models.user import User
@@ -414,16 +414,13 @@ import re
 from app.core.RtcTokenBuilder2 import RtcTokenBuilder as RtcTokenBuilder2, Role_Publisher
 
 DEFAULT_AGORA_APP_ID = "95d9ae080e1f45a6b669e1f7ceed021e"
+DEFAULT_AGORA_APP_CERTIFICATE = "bf05946338cd4ab4ab4e8e5009db4213"
 
 @router.get("/auth/rtc-token")
-def get_rtc_token(channelName: str, uid: int = 0, current_user: dict = Depends(get_current_user)):
-    """Generates an Agora RTC AccessToken2 (Token007) for the specified channel name and UID.
-    
-    Returns an empty token (App ID only mode) unless AGORA_APP_CERTIFICATE env var
-    is explicitly set.
-    """
+def get_rtc_token(channelName: str, uid: int = 0, current_user: dict | None = Depends(get_optional_current_user)):
+    """Generates an Agora RTC AccessToken2 (Token007) and Token006 fallback for the specified channel name and UID."""
     app_id = (os.getenv("AGORA_APP_ID", "") or DEFAULT_AGORA_APP_ID).strip()
-    app_certificate = os.getenv("AGORA_APP_CERTIFICATE", "").strip()
+    app_certificate = (os.getenv("AGORA_APP_CERTIFICATE", "") or DEFAULT_AGORA_APP_CERTIFICATE).strip()
     
     # Sanitize channel name to ensure strict ASCII alphanumeric compliance
     sanitized_channel = re.sub(r'[^a-zA-Z0-9_\-]', '_', channelName).strip('_')
@@ -432,56 +429,57 @@ def get_rtc_token(channelName: str, uid: int = 0, current_user: dict = Depends(g
     
     # If no certificate configured, use App ID only mode (empty token)
     if not app_certificate:
-        return {"token": "", "appId": app_id, "channelName": sanitized_channel, "uid": uid, "mode": "app_id_only"}
+        return {"token": "", "token_v1": "", "appId": app_id, "channelName": sanitized_channel, "uid": uid, "mode": "app_id_only"}
     
+    token_v2 = ""
+    token_v1 = ""
+    
+    # 1. Generate modern AccessToken2 (Token007)
     try:
-        # AccessToken2 (Token007) is the modern Agora standard for RTC SDK 4.x / 6.x
         token_v2 = RtcTokenBuilder2.build_token_with_uid(
             app_id,
             app_certificate,
             sanitized_channel,
             uid,
-            1,  # Publisher
+            Role_Publisher,
             86400,
             86400
         )
-        return {
-            "token": token_v2,
-            "token_version": "007",
-            "appId": app_id,
-            "channelName": sanitized_channel,
-            "uid": uid,
-            "mode": "certificate"
-        }
     except Exception as e:
-        # Fallback to Token006 if Token007 builder fails
-        try:
-            privilege_expired_ts = int(time.time()) + 86400
-            token_v1 = RtcTokenBuilder.buildTokenWithUid(
-                app_id,
-                app_certificate,
-                sanitized_channel,
-                uid,
-                1,
-                privilege_expired_ts
-            )
-            return {
-                "token": token_v1,
-                "token_version": "006",
-                "appId": app_id,
-                "channelName": sanitized_channel,
-                "uid": uid,
-                "mode": "certificate"
-            }
-        except Exception as e2:
-            return {"token": "", "appId": app_id, "channelName": sanitized_channel, "uid": uid, "mode": "app_id_only", "warning": f"{e} / {e2}"}
+        print(f"Token007 generation error: {e}")
+        
+    # 2. Generate standard Token006 as high-compatibility fallback
+    try:
+        privilege_expired_ts = int(time.time()) + 86400
+        token_v1 = RtcTokenBuilder.buildTokenWithUid(
+            app_id,
+            app_certificate,
+            sanitized_channel,
+            uid,
+            1,
+            privilege_expired_ts
+        )
+    except Exception as e:
+        print(f"Token006 generation error: {e}")
+
+    primary_token = token_v2 if token_v2 else token_v1
+    
+    return {
+        "token": primary_token,
+        "token_v1": token_v1,
+        "token_version": "007" if token_v2 else "006",
+        "appId": app_id,
+        "channelName": sanitized_channel,
+        "uid": uid,
+        "mode": "certificate"
+    }
 
 
 @router.get("/auth/agora-debug")
 def agora_debug(uid: int = 0):
     """Public diagnostic endpoint to check if Agora App ID and Certificate are configured."""
     app_id = (os.getenv("AGORA_APP_ID", "") or DEFAULT_AGORA_APP_ID).strip()
-    app_cert = os.getenv("AGORA_APP_CERTIFICATE", "").strip()
+    app_cert = (os.getenv("AGORA_APP_CERTIFICATE", "") or DEFAULT_AGORA_APP_CERTIFICATE).strip()
 
     token_v2 = ""
     token_v1 = ""
@@ -493,7 +491,7 @@ def agora_debug(uid: int = 0):
                 app_cert,
                 "test_room",
                 uid,
-                1,
+                Role_Publisher,
                 86400,
                 86400
             )
