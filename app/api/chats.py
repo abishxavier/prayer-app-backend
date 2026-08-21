@@ -637,7 +637,7 @@ async def get_members(chat_id: str, db: Session = Depends(get_db), current_user:
 
     members = (
         db.query(ChatMember, User.name, User.phone, User.profile_image)
-        .join(User, ChatMember.user_id == User.id)
+        .outerjoin(User, ChatMember.user_id == User.id)
         .filter(ChatMember.chat_id == chat_id)
         .all()
     )
@@ -660,13 +660,13 @@ async def get_members(chat_id: str, db: Session = Depends(get_db), current_user:
 
 
 @router.get("/chats/{chat_id}/messages", response_model=List[MessageOut])
-async def get_messages(chat_id: str, skip: int = 0, limit: int = 50, db: Session = Depends(get_db), current_user: dict = Depends(get_current_user)):
+async def get_messages(chat_id: str, skip: int = 0, limit: int = 100, db: Session = Depends(get_db), current_user: dict = Depends(get_current_user)):
     user_id = current_user["sub"]
     _verify_membership(db, chat_id, user_id)
 
     messages = (
         db.query(Message, User.name, User.profile_image, User.phone)
-        .join(User, Message.sender_id == User.id)
+        .outerjoin(User, Message.sender_id == User.id)
         .filter(Message.chat_id == chat_id)
         .order_by(Message.created_at.desc())
         .offset(skip)
