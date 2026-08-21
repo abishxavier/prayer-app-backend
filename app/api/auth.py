@@ -413,7 +413,7 @@ import re
 # DO NOT hardcode the certificate here — a wrong certificate causes errInvalidToken.
 from app.core.RtcTokenBuilder2 import RtcTokenBuilder as RtcTokenBuilder2, Role_Publisher
 
-DEFAULT_AGORA_APP_ID = "95d9ae080e1f45a6b669e1f7ceed021e"
+DEFAULT_AGORA_APP_ID = "95d9ae000e1f45a6b669e1f7ceed021e"
 DEFAULT_AGORA_APP_CERTIFICATE = "bf05946338cd4ab4ab4e8e5009db4213"
 
 @router.get("/auth/rtc-token")
