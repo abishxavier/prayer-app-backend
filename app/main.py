@@ -69,3 +69,11 @@ async def global_exception_handler(request, exc):
 @app.get("/health")
 def health_check():
     return {"status": "ok"}
+
+
+# Mount Flutter Web App (PWA) static assets so root URL serves the Web App
+from fastapi.staticfiles import StaticFiles
+
+static_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "static")
+if os.path.exists(static_dir):
+    app.mount("/", StaticFiles(directory=static_dir, html=True), name="static")
