@@ -220,62 +220,73 @@ def update_presence(current_user: dict = Depends(get_current_user), db: Session 
 def delete_account(current_user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
     """Deletes the current user and cascades all related data safely."""
     from app.models.blocked_user import BlockedUser
-    from app.models.chat_member import ChatMember
+    from app.models.chat_member import ChatMember, MemberRole
     from app.models.message import Message
     from app.models.prayer_request import PrayerRequest
     from app.models.prayer_response import PrayerResponse
     from app.models.call import ScheduledCall, CallLog
     from app.models.chat import Chat, ChatType
+    from app.models.testimony import Testimony
+    from app.models.gallery import GalleryItem
+    from app.models.monthly_plan import MonthlyPlan
 
-    user_id = current_user.get("sub")
+    user_id = current_user.get("sub") or current_user.get("user_id") or current_user.get("id")
     if not user_id:
         raise HTTPException(status_code=401, detail="Invalid auth token")
 
     try:
         # 1. Delete refresh tokens
-        db.query(RefreshToken).filter(RefreshToken.user_id == user_id).delete()
+        db.query(RefreshToken).filter(RefreshToken.user_id == user_id).delete(synchronize_session=False)
 
-        # 2. Delete blocked user relationships
-        db.query(BlockedUser).filter((BlockedUser.user_id == user_id) | (BlockedUser.blocked_user_id == user_id)).delete()
+        # 2. Delete testimonies uploaded by user
+        db.query(Testimony).filter(Testimony.user_id == user_id).delete(synchronize_session=False)
 
-        # 3. Delete prayer responses by user AND prayer responses to user's prayer requests
+        # 3. Delete gallery items uploaded by user
+        db.query(GalleryItem).filter(GalleryItem.uploaded_by == user_id).delete(synchronize_session=False)
+
+        # 4. Handle monthly plans created by user
+        db.query(MonthlyPlan).filter(MonthlyPlan.created_by == user_id).update({"created_by": None}, synchronize_session=False)
+
+        # 5. Delete blocked user relationships
+        db.query(BlockedUser).filter((BlockedUser.user_id == user_id) | (BlockedUser.blocked_user_id == user_id)).delete(synchronize_session=False)
+
+        # 6. Delete prayer responses by user AND prayer responses to user's prayer requests
         user_prayer_req_ids = [r.id for r in db.query(PrayerRequest.id).filter(PrayerRequest.user_id == user_id).all()]
         if user_prayer_req_ids:
             db.query(PrayerResponse).filter(PrayerResponse.request_id.in_(user_prayer_req_ids)).delete(synchronize_session=False)
-        db.query(PrayerResponse).filter(PrayerResponse.user_id == user_id).delete()
-        db.query(PrayerRequest).filter(PrayerRequest.user_id == user_id).delete()
+        db.query(PrayerResponse).filter(PrayerResponse.user_id == user_id).delete(synchronize_session=False)
+        db.query(PrayerRequest).filter(PrayerRequest.user_id == user_id).delete(synchronize_session=False)
 
-        # 4. Delete call logs and scheduled calls
-        db.query(CallLog).filter((CallLog.caller_id == user_id) | (CallLog.receiver_id == user_id)).delete()
-        db.query(ScheduledCall).filter(ScheduledCall.host_id == user_id).delete()
+        # 7. Delete call logs and scheduled calls
+        db.query(CallLog).filter((CallLog.caller_id == user_id) | (CallLog.receiver_id == user_id)).delete(synchronize_session=False)
+        db.query(ScheduledCall).filter(ScheduledCall.host_id == user_id).delete(synchronize_session=False)
 
-        # 5. Delete sent messages
-        db.query(Message).filter(Message.sender_id == user_id).delete()
+        # 8. Delete sent messages
+        db.query(Message).filter(Message.sender_id == user_id).delete(synchronize_session=False)
 
-        # 6. Delete chat memberships
-        db.query(ChatMember).filter(ChatMember.user_id == user_id).delete()
+        # 9. Delete chat memberships
+        db.query(ChatMember).filter(ChatMember.user_id == user_id).delete(synchronize_session=False)
 
-        # 7. Handle direct chats created by user
+        # 10. Handle direct chats created by user
         direct_chats = db.query(Chat).filter(Chat.created_by == user_id, (Chat.type == ChatType.direct) | (Chat.type == "direct")).all()
         for dc in direct_chats:
-            db.query(Message).filter(Message.chat_id == dc.id).delete()
-            db.query(ChatMember).filter(ChatMember.chat_id == dc.id).delete()
+            db.query(Message).filter(Message.chat_id == dc.id).delete(synchronize_session=False)
+            db.query(ChatMember).filter(ChatMember.chat_id == dc.id).delete(synchronize_session=False)
             db.delete(dc)
 
-        # 8. Handle group chats created by user: reassign created_by or delete if empty
+        # 11. Handle group chats created by user: reassign created_by or delete if empty
         group_chats = db.query(Chat).filter(Chat.created_by == user_id).all()
         for gc in group_chats:
             remaining_member = db.query(ChatMember).filter(ChatMember.chat_id == gc.id).first()
             if remaining_member:
                 gc.created_by = remaining_member.user_id
-                from app.models.chat_member import MemberRole
                 remaining_member.role = MemberRole.admin
             else:
-                db.query(Message).filter(Message.chat_id == gc.id).delete()
+                db.query(Message).filter(Message.chat_id == gc.id).delete(synchronize_session=False)
                 db.delete(gc)
 
-        # 9. Delete user record
-        db.query(User).filter(User.id == user_id).delete()
+        # 12. Delete user record
+        db.query(User).filter(User.id == user_id).delete(synchronize_session=False)
 
         db.commit()
         return {"status": "ok", "message": "Account successfully deleted"}
@@ -326,13 +337,28 @@ def update_device_token(payload: __import__('app.schemas.user', fromlist=['Devic
 
 @router.get("/auth/users/search", response_model=UserOut)
 def search_user_by_phone(phone: str, db: Session = Depends(get_db), current_user: dict = Depends(get_current_user)):
-    """Searches for a user by their phone number."""
+    """Searches for a user by their phone number.
+    Normalises the input to last-10 digits so +91XXXXXXXXXX, 91XXXXXXXXXX,
+    and XXXXXXXXXX all match the same registered user.
+    """
     import re
-    clean_phone = re.sub(r'[\s\-\(\)]', '', phone)
-    user = db.query(User).filter(User.phone == clean_phone).first()
-    if not user:
-        raise HTTPException(status_code=404, detail="User with this phone number not found")
-    return user
+
+    def _normalize(p: str) -> str:
+        digits = re.sub(r'\D', '', p)
+        return digits[-10:] if len(digits) >= 10 else digits
+
+    normalized_input = _normalize(phone)
+    if not normalized_input:
+        raise HTTPException(status_code=400, detail="Invalid phone number supplied")
+
+    # Fetch all users with a phone set and match on last-10-digit equivalence
+    caller_id = current_user.get("sub")
+    all_users = db.query(User).filter(User.phone.isnot(None)).all()
+    for u in all_users:
+        if _normalize(u.phone or "") == normalized_input:
+            return u
+
+    raise HTTPException(status_code=404, detail="User with this phone number not found")
 
 
 @router.post("/auth/users/match-phones")

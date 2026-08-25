@@ -12,6 +12,8 @@ class ConnectionManager:
     def __init__(self):
         # chat_id -> list of (user_id, WebSocket)
         self.active_connections: Dict[str, List[Tuple[str, WebSocket]]] = {}
+        # user_id -> list of WebSocket (for cross-room delivery, e.g. member_added)
+        self.user_connections: Dict[str, List[WebSocket]] = {}
         # user_id -> count of active connections (a user can have >1 socket open,
         # e.g. two chats or two devices, so we count rather than just add/remove)
         self.online_users: Dict[str, int] = {}
@@ -21,6 +23,7 @@ class ConnectionManager:
         await websocket.accept()
         async with self._lock:
             self.active_connections.setdefault(chat_id, []).append((user_id, websocket))
+            self.user_connections.setdefault(user_id, []).append(websocket)
             self.online_users[user_id] = self.online_users.get(user_id, 0) + 1
 
     async def disconnect(self, chat_id: str, user_id: str, websocket: WebSocket) -> None:
@@ -31,6 +34,12 @@ class ConnectionManager:
             ]
             if not self.active_connections[chat_id]:
                 del self.active_connections[chat_id]
+
+            # Remove from user_connections map
+            user_ws_list = self.user_connections.get(user_id, [])
+            self.user_connections[user_id] = [ws for ws in user_ws_list if ws is not websocket]
+            if not self.user_connections[user_id]:
+                self.user_connections.pop(user_id, None)
 
             if user_id in self.online_users:
                 self.online_users[user_id] -= 1
@@ -57,6 +66,24 @@ class ConnectionManager:
                     (uid, ws) for (uid, ws) in remaining if (uid, ws) not in stale
                 ]
 
+    async def broadcast_to_user(self, user_id: str, message: dict) -> None:
+        """Sends a message to ALL active WebSocket connections of a specific user,
+        regardless of which chat room they are currently viewing.
+        Used to deliver events like 'member_added' across rooms.
+        """
+        ws_list = list(self.user_connections.get(str(user_id), []))
+        stale: List[WebSocket] = []
+        for ws in ws_list:
+            try:
+                await ws.send_json(message)
+            except Exception:
+                stale.append(ws)
+
+        if stale:
+            async with self._lock:
+                current = self.user_connections.get(str(user_id), [])
+                self.user_connections[str(user_id)] = [ws for ws in current if ws not in stale]
+
     def is_online(self, user_id: str) -> bool:
         return self.online_users.get(user_id, 0) > 0
 
@@ -67,4 +94,4 @@ class ConnectionManager:
 
 # Single shared instance used across the app (imported by the ws endpoint and any
 # REST routes that need to read presence, e.g. GET /chats/{chat_id}/online-members)
-manager = ConnectionManager()
+manager = ConnectionManager()

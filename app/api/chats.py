@@ -147,6 +147,13 @@ async def get_chat(chat_id: str, db: Session = Depends(get_db), current_user: di
                 chat_dict["other_member_last_seen"] = other_user.last_seen
                 is_live_online = manager.is_online(str(other_user.id))
                 chat_dict["other_member_status"] = "online" if is_live_online else (other_user.status or "offline")
+                
+                # Check if current user blocked other user
+                is_blocked = db.query(BlockedUser).filter(
+                    BlockedUser.user_id == user_id,
+                    BlockedUser.blocked_user_id == other_user.id
+                ).first() is not None
+                chat_dict["is_blocked"] = is_blocked
 
     return chat_dict
 
@@ -348,6 +355,11 @@ async def list_my_chats(db: Session = Depends(get_db), current_user: dict = Depe
     ).group_by(Message.chat_id).all()
     unread_map = {str(row.chat_id): row.cnt for row in unread_counts}
 
+    # 7. Fetch all blocked user IDs by current user in bulk
+    blocked_user_ids = {
+        row[0] for row in db.query(BlockedUser.blocked_user_id).filter(BlockedUser.user_id == user_id).all()
+    }
+
     result = []
     
     for chat in chats:
@@ -365,9 +377,13 @@ async def list_my_chats(db: Session = Depends(get_db), current_user: dict = Depe
             if latest_message.is_deleted:
                 last_content = "This message was deleted"
             elif latest_message.content and latest_message.content.startswith("data:image"):
-                last_content = "📷 Photo"
-            elif latest_message.content and latest_message.content.startswith("🎙️"):
-                last_content = "🎙️ Voice note"
+                last_content = "Photo"
+            elif latest_message.content and ("Voice Note" in latest_message.content or "Voice note" in latest_message.content or latest_message.content.startswith("🎙") or latest_message.content.startswith("ð") or latest_message.content.startswith("audio:")):
+                last_content = latest_message.content if "Voice Note (" in latest_message.content else "Voice note"
+            elif latest_message.content and (latest_message.content.startswith("data:video") or "video" in latest_message.content.lower()):
+                last_content = "Video"
+            elif latest_message.content and (latest_message.content.startswith("data:audio") or "audio" in latest_message.content.lower()):
+                last_content = "Audio"
             else:
                 last_content = latest_message.content
 
@@ -392,6 +408,7 @@ async def list_my_chats(db: Session = Depends(get_db), current_user: dict = Depe
             "other_member_phone": None,
             "other_member_last_seen": None,
             "other_member_status": None,
+            "is_blocked": False,
             "last_message_at": last_msg_at,
             "last_message_content": last_content,
             "unread_count": unread_map.get(str(chat.id), 0),
@@ -415,6 +432,7 @@ async def list_my_chats(db: Session = Depends(get_db), current_user: dict = Depe
                     chat_dict["other_member_last_seen"] = other_user.last_seen
                     is_live_online = manager.is_online(str(other_user.id))
                     chat_dict["other_member_status"] = "online" if is_live_online else (other_user.status or "offline")
+                    chat_dict["is_blocked"] = other_user.id in blocked_user_ids
                     
         result.append(chat_dict)
         
@@ -506,6 +524,29 @@ async def add_member(chat_id: str, payload: ChatMemberAdd, db: Session = Depends
                 "sender_name": actor_name,
                 "created_at": sys_msg.created_at.isoformat() if sys_msg.created_at else None,
             }
+        })
+    except Exception:
+        pass
+
+    # ── Notify the newly added member via FCM push so they refresh chat list ──
+    try:
+        chat = db.query(Chat).filter(Chat.id == chat_id).first()
+        group_name = chat.name if chat else "a group"
+        if target and target.device_token:
+            send_push_notification(
+                token=target.device_token,
+                title=f"You were added to {group_name}",
+                body=f"{actor_name} added you to \"{group_name}\"",
+                data={"chat_id": chat_id, "type": "group_added"},
+            )
+    except Exception:
+        pass
+
+    # ── Broadcast member_added event so the new user's online clients refresh ──
+    try:
+        await manager.broadcast_to_user(payload.user_id, {
+            "type": "member_added",
+            "chat_id": chat_id,
         })
     except Exception:
         pass
@@ -706,16 +747,25 @@ async def send_message(chat_id: str, payload: MessageCreate, db: Session = Depen
         if not is_admin:
             raise HTTPException(status_code=403, detail="Only admins can send messages in this group")
 
-    # Check if receiver has blocked sender in direct chat
+    # Check if either user has blocked the other in direct chat
     if chat and (chat.type == ChatType.direct or getattr(chat.type, 'value', '') == 'direct'):
         other_member = db.query(ChatMember).filter(ChatMember.chat_id == chat_id, ChatMember.user_id != user_id).first()
         if other_member:
-            is_blocked = db.query(BlockedUser).filter(
+            # 1. Did the other member block the sender?
+            is_blocked_by_them = db.query(BlockedUser).filter(
                 BlockedUser.user_id == other_member.user_id,
                 BlockedUser.blocked_user_id == user_id
             ).first()
-            if is_blocked:
+            if is_blocked_by_them:
                 raise HTTPException(status_code=403, detail="You cannot send messages to this contact")
+
+            # 2. Did the sender block the other member?
+            is_blocked_by_me = db.query(BlockedUser).filter(
+                BlockedUser.user_id == user_id,
+                BlockedUser.blocked_user_id == other_member.user_id
+            ).first()
+            if is_blocked_by_me:
+                raise HTTPException(status_code=403, detail="You have blocked this contact. Unblock to send messages.")
 
     message = Message(
         chat_id=chat_id,
@@ -759,7 +809,7 @@ async def send_message(chat_id: str, payload: MessageCreate, db: Session = Depen
             member_user = db.query(User).filter(User.id == member.user_id).first()
             if member_user and member_user.device_token:
                 title = f"{user.name if user else 'Someone'} ({chat_name})" if chat and getattr(chat.type, 'value', '') == 'group' else (user.name if user else 'New Message')
-                body_preview = "📷 Photo" if (message.content and message.content.startswith("data:image")) else ("🎙️ Voice Note" if (message.content and message.content.startswith("🎙️")) else (message.content if len(message.content) < 100 else message.content[:97] + "..."))
+                body_preview = "Photo" if (message.content and message.content.startswith("data:image")) else ("Voice note" if (message.content and ("Voice Note" in message.content or "Voice note" in message.content or message.content.startswith("🎙") or message.content.startswith("ð") or message.content.startswith("audio:"))) else ("Video" if (message.content and (message.content.startswith("data:video") or "video" in message.content.lower())) else ("Audio" if (message.content and (message.content.startswith("data:audio") or "audio" in message.content.lower())) else (message.content if len(message.content) < 100 else message.content[:97] + "..."))))
                 send_push_notification(
                     token=member_user.device_token,
                     title=title,
@@ -860,6 +910,33 @@ async def delete_message(chat_id: str, message_id: str, db: Session = Depends(ge
         pass
     
     return {"status": "deleted", "content": message.content, "deleted_by_admin": deleted_by_admin}
+
+
+@router.delete("/chats/{chat_id}/messages")
+async def clear_chat_messages(
+    chat_id: str,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """Permanently deletes all messages in the chat from the database."""
+    user_id = current_user.get("sub") or current_user.get("user_id") or current_user.get("id")
+    _verify_membership(db, chat_id, user_id)
+
+    db.query(Message).filter(Message.chat_id == chat_id).delete(synchronize_session=False)
+    db.commit()
+
+    try:
+        await manager.broadcast(chat_id, {
+            "type": "chat_cleared",
+            "data": {
+                "chat_id": chat_id,
+                "cleared_by": user_id
+            }
+        })
+    except Exception:
+        pass
+
+    return {"status": "success", "message": "All chat messages permanently cleared"}
 
 
 @router.post("/chats/{chat_id}/read")
