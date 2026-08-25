@@ -8,7 +8,7 @@ from app.db.session import get_db
 from app.core.security import get_current_user
 from app.models.chat import Chat, ChatType
 from app.models.chat_member import ChatMember, MemberRole
-from app.models.message import Message
+from app.models.message import Message, MessageType
 from app.models.blocked_user import BlockedUser
 from app.models.user import User
 from app.models.call import ScheduledCall
@@ -85,6 +85,30 @@ async def create_chat(payload: ChatCreate, db: Session = Depends(get_db), curren
     membership = ChatMember(chat_id=chat.id, user_id=user_id, role=MemberRole.admin)
     db.add(membership)
     db.commit()
+
+    # Create initial system messages for group chat
+    if payload.type == ChatType.group or payload.type == "group":
+        creator = db.query(User).filter(User.id == user_id).first()
+        creator_name = creator.name if creator else "Admin"
+        
+        # 1. Security notice
+        sec_msg = Message(
+            chat_id=chat.id,
+            sender_id=user_id,
+            content="🔒 Messages and calls in this group are protected within JIPF Ministry Network.",
+            message_type=MessageType.system
+        )
+        db.add(sec_msg)
+        
+        # 2. Group creation pill
+        sys_msg = Message(
+            chat_id=chat.id,
+            sender_id=user_id,
+            content=f"{creator_name} created group \"{chat.name}\"",
+            message_type=MessageType.system
+        )
+        db.add(sys_msg)
+        db.commit()
 
     chat_out = db.query(Chat).filter(Chat.id == chat.id).first()
     setattr(chat_out, "my_role", "admin")
@@ -183,43 +207,44 @@ async def update_chat(chat_id: str, payload: ChatUpdate, db: Session = Depends(g
             db.add(sys_msg)
             db.commit()
             try:
-                await manager.broadcast(chat_id, {
-                    "type": "new_message",
-                    "data": {
-                        "id": str(sys_msg.id),
-                        "chat_id": chat_id,
-                        "sender_id": user_id,
-                        "content": sys_content,
-                        "message_type": "system",
-                        "sender_name": actor_name,
-                        "created_at": sys_msg.created_at.isoformat() if sys_msg.created_at else None,
-                    }
-                })
+                for t in ["message", "new_message"]:
+                    await manager.broadcast(chat_id, {
+                        "type": t,
+                        "data": {
+                            "id": str(sys_msg.id),
+                            "chat_id": chat_id,
+                            "sender_id": user_id,
+                            "content": sys_content,
+                            "message_type": "system",
+                            "sender_name": actor_name,
+                            "created_at": sys_msg.created_at.isoformat() if sys_msg.created_at else None,
+                        }
+                    })
             except Exception:
                 pass
-        elif payload.group_image is not None and payload.group_image != chat.group_image:
+
+        if payload.group_image is not None and payload.group_image != chat.group_image:
             chat.group_image = payload.group_image
             sys_content = f"{actor_name} changed the group profile photo"
             sys_msg = Message(chat_id=chat_id, sender_id=user_id, content=sys_content, message_type=MessageType.system)
             db.add(sys_msg)
             db.commit()
             try:
-                await manager.broadcast(chat_id, {
-                    "type": "new_message",
-                    "data": {
-                        "id": str(sys_msg.id),
-                        "chat_id": chat_id,
-                        "sender_id": user_id,
-                        "content": sys_content,
-                        "message_type": "system",
-                        "sender_name": actor_name,
-                        "created_at": sys_msg.created_at.isoformat() if sys_msg.created_at else None,
-                    }
-                })
+                for t in ["message", "new_message"]:
+                    await manager.broadcast(chat_id, {
+                        "type": t,
+                        "data": {
+                            "id": str(sys_msg.id),
+                            "chat_id": chat_id,
+                            "sender_id": user_id,
+                            "content": sys_content,
+                            "message_type": "system",
+                            "sender_name": actor_name,
+                            "created_at": sys_msg.created_at.isoformat() if sys_msg.created_at else None,
+                        }
+                    })
             except Exception:
                 pass
-        elif payload.name is not None:
-            chat.name = payload.name
     else:
         if payload.name is not None:
             chat.name = payload.name
@@ -513,18 +538,19 @@ async def add_member(chat_id: str, payload: ChatMemberAdd, db: Session = Depends
     db.refresh(sys_msg)
 
     try:
-        await manager.broadcast(chat_id, {
-            "type": "new_message",
-            "data": {
-                "id": str(sys_msg.id),
-                "chat_id": chat_id,
-                "sender_id": user_id,
-                "content": sys_content,
-                "message_type": "system",
-                "sender_name": actor_name,
-                "created_at": sys_msg.created_at.isoformat() if sys_msg.created_at else None,
-            }
-        })
+        for t in ["message", "new_message"]:
+            await manager.broadcast(chat_id, {
+                "type": t,
+                "data": {
+                    "id": str(sys_msg.id),
+                    "chat_id": chat_id,
+                    "sender_id": user_id,
+                    "content": sys_content,
+                    "message_type": "system",
+                    "sender_name": actor_name,
+                    "created_at": sys_msg.created_at.isoformat() if sys_msg.created_at else None,
+                }
+            })
     except Exception:
         pass
 
@@ -537,7 +563,12 @@ async def add_member(chat_id: str, payload: ChatMemberAdd, db: Session = Depends
                 token=target.device_token,
                 title=f"You were added to {group_name}",
                 body=f"{actor_name} added you to \"{group_name}\"",
-                data={"chat_id": chat_id, "type": "group_added"},
+                data={
+                    "chat_id": str(chat_id),
+                    "chat_name": group_name,
+                    "is_group": "true",
+                    "type": "group_added"
+                },
             )
     except Exception:
         pass
@@ -596,18 +627,19 @@ async def update_member_role(chat_id: str, target_user_id: str, payload: ChatMem
     db.refresh(sys_msg)
 
     try:
-        await manager.broadcast(chat_id, {
-            "type": "message",
-            "data": {
-                "id": str(sys_msg.id),
-                "chat_id": chat_id,
-                "sender_id": user_id,
-                "content": sys_content,
-                "message_type": "system",
-                "sender_name": actor_name,
-                "created_at": sys_msg.created_at.isoformat() if sys_msg.created_at else None,
-            }
-        })
+        for t in ["message", "new_message"]:
+            await manager.broadcast(chat_id, {
+                "type": t,
+                "data": {
+                    "id": str(sys_msg.id),
+                    "chat_id": chat_id,
+                    "sender_id": user_id,
+                    "content": sys_content,
+                    "message_type": "system",
+                    "sender_name": actor_name,
+                    "created_at": sys_msg.created_at.isoformat() if sys_msg.created_at else None,
+                }
+            })
     except Exception:
         pass
 
@@ -653,18 +685,19 @@ async def remove_member(chat_id: str, target_user_id: str, db: Session = Depends
     db.refresh(sys_msg)
 
     try:
-        await manager.broadcast(chat_id, {
-            "type": "new_message",
-            "data": {
-                "id": str(sys_msg.id),
-                "chat_id": chat_id,
-                "sender_id": user_id,
-                "content": sys_content,
-                "message_type": "system",
-                "sender_name": actor_name,
-                "created_at": sys_msg.created_at.isoformat() if sys_msg.created_at else None,
-            }
-        })
+        for t in ["message", "new_message"]:
+            await manager.broadcast(chat_id, {
+                "type": t,
+                "data": {
+                    "id": str(sys_msg.id),
+                    "chat_id": chat_id,
+                    "sender_id": user_id,
+                    "content": sys_content,
+                    "message_type": "system",
+                    "sender_name": actor_name,
+                    "created_at": sys_msg.created_at.isoformat() if sys_msg.created_at else None,
+                }
+            })
     except Exception:
         pass
 
@@ -835,7 +868,13 @@ async def send_message(chat_id: str, payload: MessageCreate, db: Session = Depen
                     token=member_user.device_token,
                     title=title,
                     body=body_preview,
-                    data={"chat_id": str(chat_id), "type": "message"}
+                    data={
+                        "chat_id": str(chat_id),
+                        "chat_name": chat_name,
+                        "is_group": "true" if is_group else "false",
+                        "other_member_id": str(user_id),
+                        "type": "message"
+                    }
                 )
     except Exception as e:
         pass
