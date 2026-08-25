@@ -1,6 +1,7 @@
 from fastapi import APIRouter, HTTPException
 from sqlalchemy.orm import Session
 from fastapi import Depends
+import re
 
 from app.db.session import get_db
 from app.core.security import verify_firebase_token, create_access_token, get_current_user, get_optional_current_user
@@ -10,12 +11,147 @@ from app.models.user import User
 from app.models.refresh_token import RefreshToken
 from datetime import datetime, timedelta, timezone
 import secrets
-from typing import List
+from typing import List, Optional
 from app.schemas.auth import DeviceOut, RevokeOthersRequest
 from agora_token_builder import RtcTokenBuilder
+from app.core.email_service import generate_otp, verify_otp, send_otp_email
+from pydantic import BaseModel
 import os
 
 router = APIRouter()
+
+
+# ── OTP Schemas ──────────────────────────────────────────────────────────────
+
+class SendOtpRequest(BaseModel):
+    email: str
+    phone: str
+    purpose: str = "registration"  # "registration" or "login"
+
+class VerifyOtpRequest(BaseModel):
+    email: str
+    otp_code: str
+    phone: Optional[str] = None
+
+class CheckDuplicateRequest(BaseModel):
+    email: Optional[str] = None
+    phone: Optional[str] = None
+
+
+def _normalize_phone(phone: str) -> str:
+    """Strip all non-digits, keep last 10 digits for matching."""
+    digits = re.sub(r'\D', '', phone)
+    return digits[-10:] if len(digits) >= 10 else digits
+
+
+# ── OTP Endpoints ─────────────────────────────────────────────────────────────
+
+@router.post("/auth/check-duplicate")
+def check_duplicate(payload: CheckDuplicateRequest, db: Session = Depends(get_db)):
+    """
+    Check if the given email or phone is already associated with a different account.
+    Returns 409 if a conflict is found, otherwise 200 {"ok": true}.
+    """
+    email = (payload.email or "").strip().lower()
+    phone_raw = (payload.phone or "").strip()
+    phone_norm = _normalize_phone(phone_raw) if phone_raw else ""
+
+    if email:
+        existing_email_user = db.query(User).filter(User.email == email).first()
+        if existing_email_user and phone_norm:
+            # Email exists — check if it's paired with a DIFFERENT phone
+            existing_phone_norm = _normalize_phone(existing_email_user.phone or "")
+            if existing_phone_norm and existing_phone_norm != phone_norm:
+                raise HTTPException(
+                    status_code=409,
+                    detail="This email is already linked to a different phone number. Please use your original phone number."
+                )
+
+    if phone_norm:
+        all_users_with_phone = db.query(User).filter(User.phone.isnot(None)).all()
+        for u in all_users_with_phone:
+            if _normalize_phone(u.phone or "") == phone_norm:
+                if email and u.email != email:
+                    raise HTTPException(
+                        status_code=409,
+                        detail="This phone number is already linked to a different account (" + u.email[:3] + "***). Please use a different phone number."
+                    )
+
+    return {"ok": True}
+
+
+@router.post("/auth/send-otp")
+def send_otp(payload: SendOtpRequest, db: Session = Depends(get_db)):
+    """
+    Generate and email a 6-digit OTP to the user.
+    For registration: also checks for duplicate email/phone conflicts.
+    For login: user must already exist.
+    """
+    email = payload.email.strip().lower()
+    phone_raw = payload.phone.strip()
+    phone_norm = _normalize_phone(phone_raw)
+    purpose = payload.purpose
+
+    if purpose == "registration":
+        # Duplicate checks
+        existing_email = db.query(User).filter(User.email == email).first()
+        if existing_email:
+            existing_phone_norm = _normalize_phone(existing_email.phone or "")
+            if existing_phone_norm and phone_norm and existing_phone_norm != phone_norm:
+                raise HTTPException(
+                    status_code=409,
+                    detail="This email is already linked to a different phone number."
+                )
+            elif existing_email.phone_verified:
+                raise HTTPException(
+                    status_code=409,
+                    detail="An account already exists with this email. Please Sign In."
+                )
+
+        all_phone_users = db.query(User).filter(User.phone.isnot(None)).all()
+        for u in all_phone_users:
+            if _normalize_phone(u.phone or "") == phone_norm and u.email != email:
+                raise HTTPException(
+                    status_code=409,
+                    detail="This phone number is already linked to another account. Please use a different number."
+                )
+    elif purpose == "login":
+        existing = db.query(User).filter(User.email == email).first()
+        if not existing:
+            raise HTTPException(status_code=404, detail="No account found with this email.")
+
+    otp_code = generate_otp(email)
+    try:
+        send_otp_email(email, otp_code, purpose=purpose)
+    except RuntimeError as e:
+        raise HTTPException(status_code=503, detail=str(e))
+
+    return {"message": f"OTP sent to {email}", "expires_in": 600}
+
+
+@router.post("/auth/verify-otp")
+def verify_otp_endpoint(payload: VerifyOtpRequest, db: Session = Depends(get_db)):
+    """
+    Verify the 6-digit OTP submitted by the user.
+    If valid, marks the phone as verified on the user record (if user exists).
+    Returns {"verified": true} on success.
+    """
+    email = payload.email.strip().lower()
+    ok = verify_otp(email, payload.otp_code)
+    if not ok:
+        raise HTTPException(status_code=400, detail="Invalid or expired OTP. Please try again.")
+
+    # If phone provided, save & mark verified on matching user
+    if payload.phone:
+        phone_norm = _normalize_phone(payload.phone)
+        user = db.query(User).filter(User.email == email).first()
+        if user:
+            user.phone = payload.phone
+            user.phone_verified = True
+            db.add(user)
+            db.commit()
+
+    return {"verified": True}
 
 AGORA_APP_ID = os.getenv("AGORA_APP_ID", "")
 AGORA_APP_CERTIFICATE = os.getenv("AGORA_APP_CERTIFICATE", "")
@@ -33,20 +169,30 @@ def login(payload: LoginRequest, db: Session = Depends(get_db)):
         raise HTTPException(status_code=400, detail="Firebase token missing required fields")
 
     user = db.query(User).filter(User.firebase_uid == firebase_uid).first()
+    is_new_user = user is None
 
-    if not user:
+    if is_new_user:
         user = User(
             firebase_uid=firebase_uid,
             name=payload.display_name or name,
             email=email,
             device_token=payload.device_token,
+            phone=payload.phone,
+            phone_verified=bool(payload.phone),
         )
         db.add(user)
         db.commit()
         db.refresh(user)
     else:
+        updated = False
         if payload.device_token:
             user.device_token = payload.device_token
+            updated = True
+        if payload.phone:
+            user.phone = payload.phone
+            user.phone_verified = True
+            updated = True
+        if updated:
             db.add(user)
             db.commit()
 
@@ -70,6 +216,8 @@ def login(payload: LoginRequest, db: Session = Depends(get_db)):
         user_id=user.id,
         name=user.name,
         email=user.email,
+        is_new_user=is_new_user,
+        phone_verified=user.phone_verified,
         )
 
 

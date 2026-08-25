@@ -9,6 +9,7 @@ class LoginRequest(BaseModel):
     device_info: Optional[str] = None
     device_token: Optional[str] = None
     display_name: Optional[str] = None
+    phone: Optional[str] = None
 
 
 class LoginResponse(BaseModel):
@@ -17,6 +18,8 @@ class LoginResponse(BaseModel):
     user_id: str
     name: str
     email: str
+    is_new_user: Optional[bool] = False
+    phone_verified: Optional[bool] = False
 
 
 class RefreshRequest(BaseModel):

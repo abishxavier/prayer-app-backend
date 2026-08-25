@@ -1,4 +1,4 @@
-from sqlalchemy import Column, String, DateTime, func
+from sqlalchemy import Column, String, DateTime, Boolean, func
 from app.db.session import Base
 import uuid
 
@@ -12,6 +12,7 @@ class User(Base):
     bio = Column(String, nullable=True)
     email = Column(String, unique=True, nullable=False)
     phone = Column(String, nullable=True)
+    phone_verified = Column(Boolean, default=False, nullable=False)
     profile_image = Column(String, nullable=True)
     profile_visibility = Column(String, default="everyone") # "everyone", "contacts", "nobody"
     status = Column(String, nullable=True)
