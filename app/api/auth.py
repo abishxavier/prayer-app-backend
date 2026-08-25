@@ -153,6 +153,16 @@ def verify_otp_endpoint(payload: VerifyOtpRequest, db: Session = Depends(get_db)
 
     return {"verified": True}
 
+
+@router.get("/auth/test-email")
+def test_email(to: str):
+    """Diagnostic endpoint to test email delivery."""
+    try:
+        send_otp_email(to.strip(), "123456", purpose="test")
+        return {"status": "ok", "message": f"Test email sent successfully to {to}"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 AGORA_APP_ID = os.getenv("AGORA_APP_ID", "")
 AGORA_APP_CERTIFICATE = os.getenv("AGORA_APP_CERTIFICATE", "")
 
