@@ -43,15 +43,21 @@ def run_migrations():
     except Exception as e:
         print(f"Error during Alembic migration: {e}")
 
-    # Ensure PostgreSQL messagetype enum contains audio and video values
+    # Ensure PostgreSQL accepts any message type (audio, video, text, image) without enum errors
     try:
-        with engine.connect() as conn:
-            conn.execute(text("ALTER TYPE messagetype ADD VALUE IF NOT EXISTS 'audio'"))
-            conn.execute(text("ALTER TYPE messagetype ADD VALUE IF NOT EXISTS 'video'"))
-            conn.commit()
-            print("PostgreSQL messagetype enum values updated successfully!")
+        with engine.connect().execution_options(isolation_level="AUTOCOMMIT") as conn:
+            try:
+                conn.execute(text("ALTER TABLE messages ALTER COLUMN message_type TYPE VARCHAR(50) USING message_type::text;"))
+                print("PostgreSQL messages.message_type converted to VARCHAR(50) successfully!")
+            except Exception as e:
+                print(f"Note on converting message_type column: {e}")
+            try:
+                conn.execute(text("ALTER TYPE messagetype ADD VALUE IF NOT EXISTS 'audio'"))
+                conn.execute(text("ALTER TYPE messagetype ADD VALUE IF NOT EXISTS 'video'"))
+            except Exception:
+                pass
     except Exception as e:
-        print(f"Enum update note (non-fatal): {e}")
+        print(f"Schema update note (non-fatal): {e}")
 
 run_migrations()
 

@@ -21,7 +21,7 @@ class Message(Base):
     chat_id = Column(String, ForeignKey("chats.id"), nullable=False)
     sender_id = Column(String, ForeignKey("users.id"), nullable=False)
     content = Column(Text, nullable=False)
-    message_type = Column(Enum(MessageType), nullable=False, default=MessageType.text)
+    message_type = Column(String(50), nullable=False, default="text")
     is_edited = Column(Boolean, default=False)
     is_deleted = Column(Boolean, default=False)
     is_read = Column(Boolean, default=False)
