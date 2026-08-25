@@ -1,14 +1,14 @@
 """
-Email OTP service using Gmail SMTP with IPv4 enforcement.
+Multi-provider Email OTP Service with HTTPS API + IPv4 SMTP fallback.
 
-Configuration (in .env or Render environment):
-  SMTP_EMAIL=your_gmail@gmail.com
-  SMTP_PASSWORD=your_gmail_app_password   # 16-character App Password (no spaces)
-
-Gmail App Password setup:
-  1. Enable 2-Step Verification on your Google account.
-  2. Go to myaccount.google.com -> Security -> App passwords.
-  3. Create an app password for "Mail" and paste it in SMTP_PASSWORD.
+Supported providers (set ANY of these in Render / .env):
+  Option A (Recommended for Render - 100% reliable HTTPS):
+    RESEND_API_KEY=re_xxxxxxxxx        (from resend.com - 3000 free emails/mo)
+  Option B (HTTPS):
+    BREVO_API_KEY=xkeysib-xxxxxxxxx    (from brevo.com - 300 free emails/day)
+  Option C (Standard SMTP - for VPS / non-firewalled hosts):
+    SMTP_EMAIL=your_gmail@gmail.com
+    SMTP_PASSWORD=your_gmail_app_password
 """
 
 import os
@@ -18,6 +18,9 @@ import socket
 import random
 import string
 import time
+import json
+import urllib.request
+import urllib.error
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 
@@ -26,10 +29,9 @@ _otp_store: dict[str, dict] = {}
 OTP_TTL_SECONDS = 600  # 10 minutes
 
 
-# ── IPv4-Forced SMTP Clients (Bypasses IPv6 unreachable error on Render) ────
+# ── IPv4-Forced SMTP Clients (for hosts that allow outbound SMTP) ───────────
 
 class IPv4SMTP(smtplib.SMTP):
-    """SMTP client that forces IPv4 resolution to prevent [Errno 101] Network unreachable."""
     def _get_socket(self, host, port, timeout):
         infos = socket.getaddrinfo(host, port, socket.AF_INET, socket.SOCK_STREAM)
         last_err = None
@@ -52,7 +54,6 @@ class IPv4SMTP(smtplib.SMTP):
 
 
 class IPv4SMTP_SSL(smtplib.SMTP_SSL):
-    """SMTP_SSL client that forces IPv4 resolution to prevent [Errno 101] Network unreachable."""
     def _get_socket(self, host, port, timeout):
         infos = socket.getaddrinfo(host, port, socket.AF_INET, socket.SOCK_STREAM)
         last_err = None
@@ -76,7 +77,7 @@ class IPv4SMTP_SSL(smtplib.SMTP_SSL):
         raise OSError("Could not resolve host to IPv4")
 
 
-# ── OTP generation & storage ─────────────────────────────────────────────────
+# ── OTP Generation & Verification ───────────────────────────────────────────
 
 def generate_otp(key: str) -> str:
     """Generate a 6-digit OTP and store it keyed by `key` (email or phone)."""
@@ -108,29 +109,10 @@ def invalidate_otp(key: str) -> None:
     _otp_store.pop(key.lower().strip(), None)
 
 
-# ── Gmail SMTP sender ────────────────────────────────────────────────────────
+# ── Email Templates ─────────────────────────────────────────────────────────
 
-def _get_smtp_credentials():
-    smtp_email = (os.getenv("SMTP_EMAIL", "") or "").strip()
-    smtp_password = (os.getenv("SMTP_PASSWORD", "") or "").replace(" ", "").strip()
-    return smtp_email, smtp_password
-
-
-def send_otp_email(to_email: str, otp_code: str, purpose: str = "verification") -> None:
-    """
-    Send a 6-digit OTP to `to_email` via Gmail SMTP using IPv4.
-    Tries Port 587 (STARTTLS) first, then falls back to Port 465 (SSL).
-    """
-    smtp_email, smtp_password = _get_smtp_credentials()
-
-    if not smtp_email or not smtp_password:
-        raise RuntimeError(
-            "Email service is not configured. "
-            "Please set SMTP_EMAIL and SMTP_PASSWORD in the Render environment variables."
-        )
-
+def _get_email_content(otp_code: str, purpose: str):
     subject = "Your JIPF Prayer App Verification Code"
-
     if purpose == "login":
         action_text = "signing in to"
         greeting = "Welcome back!"
@@ -148,7 +130,7 @@ def send_otp_email(to_email: str, otp_code: str, purpose: str = "verification") 
         </div>
         <p style="color: #cbd5e1; font-size: 15px; line-height: 1.6;">
           You are {action_text} <strong>JIPF Prayer App</strong>. 
-          Use the verification code below to complete your registration:
+          Use the verification code below to complete your authentication:
         </p>
         <div style="text-align: center; margin: 28px 0;">
           <div style="display: inline-block; background: #0f172a; border: 2px solid #3b82f6; border-radius: 12px; padding: 16px 36px;">
@@ -176,45 +158,156 @@ def send_otp_email(to_email: str, otp_code: str, purpose: str = "verification") 
         f"If you did not request this, please ignore this email."
     )
 
+    return subject, html_body, text_body
+
+
+# ── Sender Implementations ──────────────────────────────────────────────────
+
+def _send_via_resend(api_key: str, to_email: str, subject: str, html_body: str, text_body: str):
+    """Send via Resend HTTPS REST API (Port 443 - never blocked)."""
+    payload = {
+        "from": "JIPF Prayer App <onboarding@resend.dev>",
+        "to": [to_email],
+        "subject": subject,
+        "html": html_body,
+        "text": text_body,
+    }
+    req = urllib.request.Request(
+        "https://api.resend.com/emails",
+        data=json.dumps(payload).encode("utf-8"),
+        headers={
+            "Authorization": f"Bearer {api_key.strip()}",
+            "Content-Type": "application/json",
+            "User-Agent": "PrayerApp/1.0",
+        },
+        method="POST"
+    )
+    with urllib.request.urlopen(req, timeout=15) as res:
+        if res.status in (200, 201):
+            return True
+        raise RuntimeError(f"Resend returned status {res.status}")
+
+
+def _send_via_brevo(api_key: str, to_email: str, subject: str, html_body: str, text_body: str):
+    """Send via Brevo (Sendinblue) HTTPS REST API (Port 443 - never blocked)."""
+    payload = {
+        "sender": {"name": "JIPF Prayer App", "email": "jipfprayerapp@gmail.com"},
+        "to": [{"email": to_email}],
+        "subject": subject,
+        "htmlContent": html_body,
+        "textContent": text_body,
+    }
+    req = urllib.request.Request(
+        "https://api.brevo.com/v3/smtp/email",
+        data=json.dumps(payload).encode("utf-8"),
+        headers={
+            "api-key": api_key.strip(),
+            "Content-Type": "application/json",
+            "User-Agent": "PrayerApp/1.0",
+        },
+        method="POST"
+    )
+    with urllib.request.urlopen(req, timeout=15) as res:
+        if res.status in (200, 201, 202):
+            return True
+        raise RuntimeError(f"Brevo returned status {res.status}")
+
+
+def _send_via_smtp(smtp_email: str, smtp_password: str, to_email: str, subject: str, html_body: str, text_body: str):
+    """Send via Gmail SMTP using IPv4-forced client."""
     msg = MIMEMultipart("alternative")
     msg["Subject"] = subject
     msg["From"] = f"JIPF Prayer App <{smtp_email}>"
     msg["To"] = to_email
-
     msg.attach(MIMEText(text_body, "plain"))
     msg.attach(MIMEText(html_body, "html"))
 
     errors = []
-
-    # Attempt 1: Port 587 with STARTTLS (Preferred on cloud platforms)
+    # 1. Try port 587 (STARTTLS)
     try:
-        server = IPv4SMTP("smtp.gmail.com", 587, timeout=15)
+        server = IPv4SMTP("smtp.gmail.com", 587, timeout=10)
         server.ehlo()
         server.starttls()
         server.ehlo()
         server.login(smtp_email, smtp_password)
         server.sendmail(smtp_email, to_email, msg.as_string())
         server.quit()
-        return
+        return True
     except Exception as e:
         errors.append(f"Port 587: {e}")
 
-    # Attempt 2: Port 465 with SSL
+    # 2. Try port 465 (SSL)
     try:
-        server_ssl = IPv4SMTP_SSL("smtp.gmail.com", 465, timeout=15)
+        server_ssl = IPv4SMTP_SSL("smtp.gmail.com", 465, timeout=10)
         server_ssl.ehlo()
         server_ssl.login(smtp_email, smtp_password)
         server_ssl.sendmail(smtp_email, to_email, msg.as_string())
         server_ssl.quit()
-        return
+        return True
     except Exception as e:
         errors.append(f"Port 465: {e}")
 
-    # If both failed
-    err_str = " | ".join(errors)
-    if "AuthenticationError" in err_str or "Username and Password not accepted" in err_str:
+    raise RuntimeError(f"SMTP failed: {' | '.join(errors)}")
+
+
+# ── Main Dispatcher ─────────────────────────────────────────────────────────
+
+def send_otp_email(to_email: str, otp_code: str, purpose: str = "verification") -> None:
+    """
+    Dispatches OTP email via the best available provider.
+    Priority:
+      1. Resend HTTPS API (if RESEND_API_KEY is set)
+      2. Brevo HTTPS API (if BREVO_API_KEY is set)
+      3. Gmail SMTP IPv4 (if SMTP_EMAIL & SMTP_PASSWORD are set)
+    """
+    subject, html_body, text_body = _get_email_content(otp_code, purpose)
+
+    resend_key = os.getenv("RESEND_API_KEY", "").strip()
+    brevo_key = os.getenv("BREVO_API_KEY", "").strip()
+    smtp_email = os.getenv("SMTP_EMAIL", "").strip()
+    smtp_password = os.getenv("SMTP_PASSWORD", "").replace(" ", "").strip()
+
+    errors = []
+
+    # 1. Resend (HTTPS)
+    if resend_key:
+        try:
+            _send_via_resend(resend_key, to_email, subject, html_body, text_body)
+            print(f"[Email] Sent OTP to {to_email} via Resend")
+            return
+        except Exception as e:
+            errors.append(f"Resend error: {e}")
+
+    # 2. Brevo (HTTPS)
+    if brevo_key:
+        try:
+            _send_via_brevo(brevo_key, to_email, subject, html_body, text_body)
+            print(f"[Email] Sent OTP to {to_email} via Brevo")
+            return
+        except Exception as e:
+            errors.append(f"Brevo error: {e}")
+
+    # 3. SMTP (IPv4)
+    if smtp_email and smtp_password:
+        try:
+            _send_via_smtp(smtp_email, smtp_password, to_email, subject, html_body, text_body)
+            print(f"[Email] Sent OTP to {to_email} via Gmail SMTP")
+            return
+        except Exception as e:
+            errors.append(f"SMTP error: {e}")
+
+    # If no provider worked or configured
+    if not resend_key and not brevo_key and not (smtp_email and smtp_password):
         raise RuntimeError(
-            "Gmail authentication failed. Please check SMTP_EMAIL and SMTP_PASSWORD in Render. "
-            "Make sure you are using a 16-character Gmail App Password."
+            "No email service configured. Please set RESEND_API_KEY (recommended for Render) "
+            "or SMTP_EMAIL/SMTP_PASSWORD in Render environment variables."
         )
-    raise RuntimeError(f"Failed to send OTP email: {err_str}")
+
+    # Cloud hosting firewall explanation
+    if any("timed out" in err or "unreachable" in err for err in errors):
+        raise RuntimeError(
+            "Render blocks outbound SMTP ports (587/465). "
+            "Please add RESEND_API_KEY (free from resend.com) to your Render environment variables for instant HTTPS email delivery."
+        )
+
+    raise RuntimeError(f"Failed to send OTP email: {' | '.join(errors)}")
