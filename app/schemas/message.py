@@ -1,12 +1,11 @@
 from pydantic import BaseModel
 from datetime import datetime
-from typing import Optional
-from app.models.message import MessageType
+from typing import Optional, Union
 
 
 class MessageCreate(BaseModel):
     content: str
-    message_type: MessageType = MessageType.text
+    message_type: Union[MessageType, str] = MessageType.text
 
 
 class MessageOut(BaseModel):
@@ -14,7 +13,7 @@ class MessageOut(BaseModel):
     chat_id: str
     sender_id: str
     content: str
-    message_type: MessageType
+    message_type: Union[MessageType, str]
     is_edited: bool = False
     is_deleted: bool = False
     is_read: bool = False

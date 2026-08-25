@@ -37,12 +37,18 @@ def login(payload: LoginRequest, db: Session = Depends(get_db)):
     if not user:
         user = User(
             firebase_uid=firebase_uid,
-            name=name,
+            name=payload.display_name or name,
             email=email,
+            device_token=payload.device_token,
         )
         db.add(user)
         db.commit()
         db.refresh(user)
+    else:
+        if payload.device_token:
+            user.device_token = payload.device_token
+            db.add(user)
+            db.commit()
 
     access_token = create_access_token(data={"sub": user.id, "firebase_uid": firebase_uid})
 

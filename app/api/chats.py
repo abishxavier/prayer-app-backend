@@ -802,21 +802,42 @@ async def send_message(chat_id: str, payload: MessageCreate, db: Session = Depen
     except Exception:
         pass
 
-    # Push notifications to offline members
+    # Push notifications to offline / background members
     try:
         members = db.query(ChatMember).filter(ChatMember.chat_id == chat_id, ChatMember.user_id != user_id).all()
+        chat_type_str = chat.type.value if (chat and hasattr(chat.type, 'value')) else (str(chat.type) if chat else '')
+        is_group = (chat_type_str == 'group' or (chat and chat.type == ChatType.group) or (chat and chat.type == "group"))
+
         for member in members:
             member_user = db.query(User).filter(User.id == member.user_id).first()
             if member_user and member_user.device_token:
-                title = f"{user.name if user else 'Someone'} ({chat_name})" if chat and getattr(chat.type, 'value', '') == 'group' else (user.name if user else 'New Message')
-                body_preview = "Photo" if (message.content and message.content.startswith("data:image")) else ("Voice note" if (message.content and ("Voice Note" in message.content or "Voice note" in message.content or message.content.startswith("🎙") or message.content.startswith("ð") or message.content.startswith("audio:"))) else ("Video" if (message.content and (message.content.startswith("data:video") or "video" in message.content.lower())) else ("Audio" if (message.content and (message.content.startswith("data:audio") or "audio" in message.content.lower())) else (message.content if len(message.content) < 100 else message.content[:97] + "..."))))
+                sender_display_name = user.name if user and user.name else "Someone"
+                if is_group:
+                    title = f"{sender_display_name} in {chat_name}"
+                else:
+                    title = sender_display_name
+
+                raw_content = message.content or ""
+                msg_type_str = str(message.message_type.value if hasattr(message.message_type, 'value') else message.message_type)
+                
+                if raw_content.startswith("data:image"):
+                    body_preview = "📷 Photo"
+                elif raw_content.startswith("data:audio") or msg_type_str == "audio" or "Voice Note" in raw_content or "Voice note" in raw_content or raw_content.startswith("🎙"):
+                    body_preview = "🎙️ Voice note"
+                elif raw_content.startswith("data:video") or "video" in raw_content.lower():
+                    body_preview = "🎥 Video"
+                elif raw_content.startswith("🙏 Prayer Request:") or raw_content.startswith("🙏 Please pray for:"):
+                    body_preview = "🙏 Prayer Petition"
+                else:
+                    body_preview = raw_content if len(raw_content) < 100 else raw_content[:97] + "..."
+
                 send_push_notification(
                     token=member_user.device_token,
                     title=title,
                     body=body_preview,
-                    data={"chat_id": chat_id, "type": "message"}
+                    data={"chat_id": str(chat_id), "type": "message"}
                 )
-    except Exception:
+    except Exception as e:
         pass
 
     return {
@@ -824,7 +845,7 @@ async def send_message(chat_id: str, payload: MessageCreate, db: Session = Depen
         "chat_id": str(message.chat_id),
         "sender_id": str(message.sender_id),
         "content": message.content,
-        "message_type": message.message_type,
+        "message_type": message.message_type.value if hasattr(message.message_type, 'value') else str(message.message_type),
         "is_edited": message.is_edited,
         "is_deleted": message.is_deleted,
         "is_read": message.is_read,

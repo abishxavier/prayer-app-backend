@@ -9,6 +9,8 @@ from app.db.session import Base
 class MessageType(str, enum.Enum):
     text = "text"
     image = "image"
+    audio = "audio"
+    video = "video"
     system = "system"
 
 

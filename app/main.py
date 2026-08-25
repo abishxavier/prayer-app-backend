@@ -27,6 +27,8 @@ import sys
 from alembic.config import Config
 from alembic import command
 
+from sqlalchemy import text
+
 def run_migrations():
     try:
         print("Starting Alembic migrations...")
@@ -40,6 +42,16 @@ def run_migrations():
         print("Alembic migrations completed successfully!")
     except Exception as e:
         print(f"Error during Alembic migration: {e}")
+
+    # Ensure PostgreSQL messagetype enum contains audio and video values
+    try:
+        with engine.connect() as conn:
+            conn.execute(text("ALTER TYPE messagetype ADD VALUE IF NOT EXISTS 'audio'"))
+            conn.execute(text("ALTER TYPE messagetype ADD VALUE IF NOT EXISTS 'video'"))
+            conn.commit()
+            print("PostgreSQL messagetype enum values updated successfully!")
+    except Exception as e:
+        print(f"Enum update note (non-fatal): {e}")
 
 run_migrations()
 

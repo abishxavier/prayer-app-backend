@@ -7,6 +7,8 @@ class LoginRequest(BaseModel):
     id_token: str  # Firebase ID token from the Flutter app
     device_id: Optional[str] = None
     device_info: Optional[str] = None
+    device_token: Optional[str] = None
+    display_name: Optional[str] = None
 
 
 class LoginResponse(BaseModel):

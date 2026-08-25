@@ -58,16 +58,19 @@ def _is_admin(user: User) -> bool:
 
 
 def _item_to_dict(item: GalleryItem) -> dict:
+    created_at_str = ""
+    if item.created_at:
+        created_at_str = item.created_at.isoformat() if hasattr(item.created_at, 'isoformat') else str(item.created_at)
     return {
-        "id": item.id,
+        "id": str(item.id),
         "title": item.title,
         "description": item.description,
         "image_data": item.image_data,
-        "uploaded_by": item.uploaded_by,
-        "uploader_name": item.uploader_name,
-        "is_featured": item.is_featured,
-        "sort_order": item.sort_order,
-        "created_at": item.created_at.isoformat() if item.created_at else "",
+        "uploaded_by": str(item.uploaded_by),
+        "uploader_name": item.uploader_name or "Community Member",
+        "is_featured": bool(item.is_featured),
+        "sort_order": int(item.sort_order or 0),
+        "created_at": created_at_str,
     }
 
 
@@ -97,18 +100,31 @@ def add_gallery_item(
     db: Session = Depends(get_db),
     current_user: dict = Depends(get_current_user),
 ):
-    """Upload a new gallery image. Any logged-in user can upload (admin restriction can be added later)."""
-    user = db.query(User).filter(User.firebase_uid == current_user["uid"]).first()
+    """Upload a new gallery image. Any logged-in user can upload."""
+    user_id = current_user.get("sub") or current_user.get("user_id") or current_user.get("id")
+    user = db.query(User).filter(User.id == user_id).first() if user_id else None
+    if not user and current_user.get("email"):
+        user = db.query(User).filter(User.email == current_user.get("email")).first()
+    if not user and current_user.get("phone"):
+        user = db.query(User).filter(User.phone == current_user.get("phone")).first()
+
     if not user:
-        raise HTTPException(status_code=404, detail="User not found")
+        if user_id:
+            uploader_id = str(user_id)
+            uploader_name = current_user.get("name") or "Community Member"
+        else:
+            raise HTTPException(status_code=404, detail="User not found")
+    else:
+        uploader_id = str(user.id)
+        uploader_name = user.name or "Community Member"
 
     item = GalleryItem(
         id=str(uuid.uuid4()),
         title=payload.title,
         description=payload.description,
         image_data=payload.image_data,
-        uploaded_by=user.id,
-        uploader_name=user.name,
+        uploaded_by=uploader_id,
+        uploader_name=uploader_name,
         is_featured=payload.is_featured,
         sort_order=payload.sort_order,
     )
@@ -126,7 +142,8 @@ def update_gallery_item(
     current_user: dict = Depends(get_current_user),
 ):
     """Update caption, featured status, or sort order. Only the uploader can edit."""
-    user = db.query(User).filter(User.firebase_uid == current_user["uid"]).first()
+    user_id = current_user["sub"]
+    user = db.query(User).filter(User.id == user_id).first()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
 
@@ -158,7 +175,8 @@ def delete_gallery_item(
     current_user: dict = Depends(get_current_user),
 ):
     """Delete a gallery item. Only the uploader can delete their own items."""
-    user = db.query(User).filter(User.firebase_uid == current_user["uid"]).first()
+    user_id = current_user["sub"]
+    user = db.query(User).filter(User.id == user_id).first()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
 
@@ -172,3 +190,4 @@ def delete_gallery_item(
     db.delete(item)
     db.commit()
     return {"success": True}
+

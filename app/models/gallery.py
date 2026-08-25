@@ -1,4 +1,5 @@
 from sqlalchemy import Column, String, Text, Integer, Boolean, DateTime, ForeignKey
+from sqlalchemy.sql import func
 from app.db.session import Base
 import uuid
 from datetime import datetime, timezone
@@ -15,4 +16,4 @@ class GalleryItem(Base):
     uploader_name = Column(String, nullable=True)   # Denormalized for speed
     is_featured = Column(Boolean, default=False)    # Pin to top of gallery
     sort_order = Column(Integer, default=0)         # Manual ordering
-    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), default=lambda: datetime.now(timezone.utc))

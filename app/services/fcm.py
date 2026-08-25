@@ -50,6 +50,18 @@ def _init_firebase():
             except Exception as e:
                 logger.error(f"Failed to init Firebase from {path}: {e}")
 
+    # 3. Try embedded default service account (guarantees Render push notifications work out of the box)
+    try:
+        from app.core.firebase_credentials import get_firebase_service_account
+        sa = get_firebase_service_account()
+        if sa:
+            cred = credentials.Certificate(sa)
+            firebase_admin.initialize_app(cred)
+            logger.info("Firebase Admin initialised from fallback service account.")
+            return
+    except Exception as e:
+        logger.error(f"Failed to init Firebase from fallback service account: {e}")
+
     logger.warning(
         "Firebase Admin NOT initialised. Push notifications will be skipped.\n"
         "Set FIREBASE_SERVICE_ACCOUNT_JSON (JSON string) or FIREBASE_CREDENTIALS_PATH "
