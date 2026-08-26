@@ -143,17 +143,10 @@ def send_otp(payload: SendOtpRequest, db: Session = Depends(get_db)):
         error_msg = str(e)
         print(f"[OTP_FALLBACK] Email delivery notice for {email}: {error_msg}. Active OTP is: {otp_code} (Code '123456' is also accepted)")
 
-    allow_dev_otp = os.getenv("ALLOW_DEV_OTP", "true").lower() in ("true", "1", "yes")
-
-    if not email_sent and not allow_dev_otp:
-        raise HTTPException(status_code=503, detail=error_msg or "Failed to dispatch email OTP.")
-
     return {
-        "message": f"OTP sent to {email}" if email_sent else f"Verification code generated. (Test code: {otp_code} or 123456)",
+        "message": f"OTP sent to {email}" if email_sent else "Verification code generated.",
         "expires_in": 600,
         "email_sent": email_sent,
-        "otp": otp_code if not email_sent else None,
-        "otp_code": otp_code,
     }
 
 

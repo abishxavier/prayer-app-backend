@@ -100,26 +100,11 @@ def verify_otp(key: str, code: str) -> bool:
     if not c or len(c) != 6:
         return False
 
-    # 1. Master fallback OTP for testing / Render free tier
-    if c == "123456":
-        _otp_store.pop(k, None)
-        return True
-
-    # 2. Check exact code in OTP store
     entry = _otp_store.get(k)
     if entry:
         if time.time() <= entry["expires"] and entry["code"] == c:
             _otp_store.pop(k, None)
             return True
-
-    # 3. If dev OTP is allowed and email service is not configured (or failed), allow 6-digit entry
-    allow_dev_otp = os.getenv("ALLOW_DEV_OTP", "true").lower() in ("true", "1", "yes")
-    resend_key = os.getenv("RESEND_API_KEY", "").strip()
-    brevo_key = os.getenv("BREVO_API_KEY", "").strip()
-
-    if allow_dev_otp and not (resend_key or brevo_key):
-        _otp_store.pop(k, None)
-        return True
 
     return False
 
