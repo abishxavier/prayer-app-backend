@@ -21,6 +21,10 @@ class GalleryItemCreate(BaseModel):
     sort_order: int = 0
 
 
+class GalleryBatchCreate(BaseModel):
+    items: List[GalleryItemCreate]
+
+
 class GalleryItemUpdate(BaseModel):
     title: Optional[str] = None
     description: Optional[str] = None
@@ -132,6 +136,52 @@ def add_gallery_item(
     db.commit()
     db.refresh(item)
     return _item_to_dict(item)
+
+
+@router.post("/gallery/batch")
+def add_gallery_items_batch(
+    payload: GalleryBatchCreate,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """Upload multiple gallery images in a single batch request."""
+    user_id = current_user.get("sub") or current_user.get("user_id") or current_user.get("id")
+    user = db.query(User).filter(User.id == user_id).first() if user_id else None
+    if not user and current_user.get("email"):
+        user = db.query(User).filter(User.email == current_user.get("email")).first()
+    if not user and current_user.get("phone"):
+        user = db.query(User).filter(User.phone == current_user.get("phone")).first()
+
+    if not user:
+        if user_id:
+            uploader_id = str(user_id)
+            uploader_name = current_user.get("name") or "Community Member"
+        else:
+            raise HTTPException(status_code=404, detail="User not found")
+    else:
+        uploader_id = str(user.id)
+        uploader_name = user.name or "Community Member"
+
+    created_items = []
+    for p in payload.items:
+        item = GalleryItem(
+            id=str(uuid.uuid4()),
+            title=p.title,
+            description=p.description,
+            image_data=p.image_data,
+            uploaded_by=uploader_id,
+            uploader_name=uploader_name,
+            is_featured=p.is_featured,
+            sort_order=p.sort_order,
+        )
+        db.add(item)
+        created_items.append(item)
+
+    db.commit()
+    for item in created_items:
+        db.refresh(item)
+
+    return [_item_to_dict(i) for i in created_items]
 
 
 @router.patch("/gallery/{item_id}")
