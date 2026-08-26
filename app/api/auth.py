@@ -37,6 +37,9 @@ class CheckDuplicateRequest(BaseModel):
     email: Optional[str] = None
     phone: Optional[str] = None
 
+class GetPhoneRequest(BaseModel):
+    email: str
+
 
 def _normalize_phone(phone: str) -> str:
     """Strip all non-digits, keep last 10 digits for matching."""
@@ -45,6 +48,16 @@ def _normalize_phone(phone: str) -> str:
 
 
 # ── OTP Endpoints ─────────────────────────────────────────────────────────────
+
+@router.post("/auth/get-phone")
+def get_user_phone(payload: GetPhoneRequest, db: Session = Depends(get_db)):
+    """Retrieve registered phone number for a user by email."""
+    email = payload.email.strip().lower()
+    user = db.query(User).filter(User.email == email).first()
+    if not user or not user.phone:
+        return {"phone": "", "name": user.name if user else "User"}
+    return {"phone": user.phone, "name": user.name}
+
 
 @router.post("/auth/check-duplicate")
 def check_duplicate(payload: CheckDuplicateRequest, db: Session = Depends(get_db)):
