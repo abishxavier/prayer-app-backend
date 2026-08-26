@@ -71,23 +71,28 @@ def check_duplicate(payload: CheckDuplicateRequest, db: Session = Depends(get_db
 
     if email:
         existing_email_user = db.query(User).filter(User.email == email).first()
-        if existing_email_user and phone_norm:
-            # Email exists — check if it's paired with a DIFFERENT phone
-            existing_phone_norm = _normalize_phone(existing_email_user.phone or "")
-            if existing_phone_norm and existing_phone_norm != phone_norm:
+        if existing_email_user:
+            if not phone_norm:
                 raise HTTPException(
                     status_code=409,
-                    detail="This email is already linked to a different phone number. Please use your original phone number."
+                    detail="This email is already registered. Please sign in instead."
                 )
+            else:
+                existing_phone_norm = _normalize_phone(existing_email_user.phone or "")
+                if existing_phone_norm and existing_phone_norm != phone_norm:
+                    raise HTTPException(
+                        status_code=409,
+                        detail="This email is already registered with a different phone number. Please sign in instead."
+                    )
 
     if phone_norm:
         all_users_with_phone = db.query(User).filter(User.phone.isnot(None)).all()
         for u in all_users_with_phone:
             if _normalize_phone(u.phone or "") == phone_norm:
-                if email and u.email != email:
+                if not email or u.email != email:
                     raise HTTPException(
                         status_code=409,
-                        detail="This phone number is already linked to a different account (" + u.email[:3] + "***). Please use a different phone number."
+                        detail="This phone number is already linked to another account. Please use a different number."
                     )
 
     return {"ok": True}
