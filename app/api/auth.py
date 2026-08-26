@@ -120,7 +120,7 @@ def send_otp(payload: SendOtpRequest, db: Session = Depends(get_db)):
         if not existing:
             raise HTTPException(status_code=404, detail="No account found with this email.")
 
-    otp_code = generate_otp(email)
+    otp_code = generate_otp(email, alt_key=phone_norm or None)
     email_sent = False
     error_msg = ""
     try:
@@ -139,6 +139,8 @@ def send_otp(payload: SendOtpRequest, db: Session = Depends(get_db)):
         "message": f"OTP sent to {email}" if email_sent else f"Verification code generated. (Test code: {otp_code} or 123456)",
         "expires_in": 600,
         "email_sent": email_sent,
+        "otp": otp_code if not email_sent else None,
+        "otp_code": otp_code,
     }
 
 
@@ -150,13 +152,19 @@ def verify_otp_endpoint(payload: VerifyOtpRequest, db: Session = Depends(get_db)
     Returns {"verified": true} on success.
     """
     email = payload.email.strip().lower()
+    phone_raw = (payload.phone or "").strip()
+    phone_norm = _normalize_phone(phone_raw) if phone_raw else ""
+
+    # Verify by email or phone
     ok = verify_otp(email, payload.otp_code)
+    if not ok and phone_norm:
+        ok = verify_otp(phone_norm, payload.otp_code)
+
     if not ok:
         raise HTTPException(status_code=400, detail="Invalid or expired OTP. Please try again.")
 
     # If phone provided, save & mark verified on matching user
     if payload.phone:
-        phone_norm = _normalize_phone(payload.phone)
         user = db.query(User).filter(User.email == email).first()
         if user:
             user.phone = payload.phone

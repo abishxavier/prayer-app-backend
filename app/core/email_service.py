@@ -79,13 +79,16 @@ class IPv4SMTP_SSL(smtplib.SMTP_SSL):
 
 # ── OTP Generation & Verification ───────────────────────────────────────────
 
-def generate_otp(key: str) -> str:
-    """Generate a 6-digit OTP and store it keyed by `key` (email or phone)."""
+def generate_otp(key: str, alt_key: str | None = None) -> str:
+    """Generate a 6-digit OTP and store it keyed by `key` (email or phone) and optional `alt_key`."""
     code = "".join(random.choices(string.digits, k=6))
-    _otp_store[key.lower().strip()] = {
+    entry = {
         "code": code,
         "expires": time.time() + OTP_TTL_SECONDS,
     }
+    _otp_store[key.lower().strip()] = entry
+    if alt_key and alt_key.strip():
+        _otp_store[alt_key.lower().strip()] = entry
     return code
 
 
@@ -259,7 +262,7 @@ def _send_via_smtp(smtp_email: str, smtp_password: str, to_email: str, subject: 
     errors = []
     # 1. Try port 587 (STARTTLS)
     try:
-        server = IPv4SMTP("smtp.gmail.com", 587, timeout=10)
+        server = IPv4SMTP("smtp.gmail.com", 587, timeout=4)
         server.ehlo()
         server.starttls()
         server.ehlo()
@@ -272,7 +275,7 @@ def _send_via_smtp(smtp_email: str, smtp_password: str, to_email: str, subject: 
 
     # 2. Try port 465 (SSL)
     try:
-        server_ssl = IPv4SMTP_SSL("smtp.gmail.com", 465, timeout=10)
+        server_ssl = IPv4SMTP_SSL("smtp.gmail.com", 465, timeout=4)
         server_ssl.ehlo()
         server_ssl.login(smtp_email, smtp_password)
         server_ssl.sendmail(smtp_email, to_email, msg.as_string())
