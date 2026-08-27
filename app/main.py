@@ -61,7 +61,12 @@ def run_migrations():
 
 run_migrations()
 
-app = FastAPI(title="Prayer App API")
+from fastapi.responses import JSONResponse
+
+class UTF8JSONResponse(JSONResponse):
+    media_type = "application/json; charset=utf-8"
+
+app = FastAPI(title="Prayer App API", default_response_class=UTF8JSONResponse)
 
 from fastapi.middleware.cors import CORSMiddleware
 

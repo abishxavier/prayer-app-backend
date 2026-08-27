@@ -18,6 +18,27 @@ from app.schemas.chat import (
 from app.schemas.message import MessageCreate, MessageOut, MessageUpdate
 from app.services.fcm import send_push_notification
 
+import re
+
+def repair_mojibake(text: str) -> str:
+    """Accurately recovers UTF-8 bytes that were misdecoded as Latin-1 / Windows-1252 (e.g. Tamil characters, emojis)."""
+    if not text or not isinstance(text, str):
+        return text
+    if text.startswith("data:") or text.startswith("http://") or text.startswith("https://"):
+        return text
+    if any(p in text for p in ['à®', 'à¯', 'à®¾', 'à®¿', 'ð\x9f', 'â\x80', 'Ã']):
+        try:
+            return text.encode('latin1').decode('utf-8')
+        except Exception:
+            try:
+                return text.encode('cp1252').decode('utf-8')
+            except Exception:
+                pass
+    return text
+
+def _clean_mojibake(text: str) -> str:
+    return repair_mojibake(text)
+
 router = APIRouter()
 
 
@@ -91,11 +112,11 @@ async def create_chat(payload: ChatCreate, db: Session = Depends(get_db), curren
         creator = db.query(User).filter(User.id == user_id).first()
         creator_name = creator.name if creator else "Admin"
         
-        # 1. Security notice
+        # 1. Security notice (Clean message without mojibake; UI renders lock widget)
         sec_msg = Message(
             chat_id=chat.id,
             sender_id=user_id,
-            content="🔒 Messages and calls in this group are protected within JIPF Ministry Network.",
+            content="Messages and calls in this group are protected within JIPF Ministry Network.",
             message_type=MessageType.system
         )
         db.add(sec_msg)
@@ -750,11 +771,13 @@ async def get_messages(chat_id: str, skip: int = 0, limit: int = 100, db: Sessio
     
     result = []
     for msg, name, profile_image, phone in messages:
+        raw_c = msg.content if not msg.is_deleted else (msg.content if ("deleted by admin" in (msg.content or "")) else "This message was deleted")
+        raw_c = repair_mojibake(raw_c)
         msg_dict = {
             "id": msg.id,
             "chat_id": msg.chat_id,
             "sender_id": msg.sender_id,
-            "content": msg.content if not msg.is_deleted else (msg.content if ("deleted by admin" in (msg.content or "")) else "This message was deleted"),
+            "content": raw_c,
             "message_type": msg.message_type,
             "is_edited": msg.is_edited,
             "is_deleted": msg.is_deleted,
@@ -800,10 +823,11 @@ async def send_message(chat_id: str, payload: MessageCreate, db: Session = Depen
             if is_blocked_by_me:
                 raise HTTPException(status_code=403, detail="You have blocked this contact. Unblock to send messages.")
 
+    clean_content = repair_mojibake(payload.content)
     message = Message(
         chat_id=chat_id,
         sender_id=user_id,
-        content=payload.content,
+        content=clean_content,
         message_type=payload.message_type,
     )
     db.add(message)
@@ -812,6 +836,8 @@ async def send_message(chat_id: str, payload: MessageCreate, db: Session = Depen
     
     user = db.query(User).filter(User.id == user_id).first()
     chat_name = chat.name if chat and chat.name else "JIPF Chat"
+    sender_profile_img = user.profile_image if user else None
+    group_avatar_img = chat.group_image if (chat and chat.group_image) else None
 
     # Broadcast directly in async event loop
     try:
@@ -828,7 +854,7 @@ async def send_message(chat_id: str, payload: MessageCreate, db: Session = Depen
                 "is_read": message.is_read,
                 "created_at": message.created_at.isoformat(),
                 "sender_name": user.name if user else None,
-                "sender_image": user.profile_image if user else None,
+                "sender_image": sender_profile_img,
                 "sender_phone": user.phone if user else None,
             }
         })
@@ -840,6 +866,7 @@ async def send_message(chat_id: str, payload: MessageCreate, db: Session = Depen
         members = db.query(ChatMember).filter(ChatMember.chat_id == chat_id, ChatMember.user_id != user_id).all()
         chat_type_str = chat.type.value if (chat and hasattr(chat.type, 'value')) else (str(chat.type) if chat else '')
         is_group = (chat_type_str == 'group' or (chat and chat.type == ChatType.group) or (chat and chat.type == "group"))
+        notification_avatar = group_avatar_img if (is_group and group_avatar_img) else sender_profile_img
 
         for member in members:
             member_user = db.query(User).filter(User.id == member.user_id).first()
@@ -868,10 +895,16 @@ async def send_message(chat_id: str, payload: MessageCreate, db: Session = Depen
                     token=member_user.device_token,
                     title=title,
                     body=body_preview,
+                    image=notification_avatar,
                     data={
                         "chat_id": str(chat_id),
                         "chat_name": chat_name,
                         "is_group": "true" if is_group else "false",
+                        "sender_id": str(user_id),
+                        "sender_name": sender_display_name,
+                        "sender_image": sender_profile_img or "",
+                        "profile_image": notification_avatar or sender_profile_img or "",
+                        "group_image": group_avatar_img or "",
                         "other_member_id": str(user_id),
                         "type": "message"
                     }

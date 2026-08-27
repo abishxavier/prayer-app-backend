@@ -11,6 +11,19 @@ from app.schemas.prayer import (
     PrayerResponseCreate, PrayerResponseOut
 )
 
+def repair_mojibake(text: str) -> str:
+    if not text or not isinstance(text, str):
+        return text
+    if any(p in text for p in ['à®', 'à¯', 'à®¾', 'à®¿', 'ð\x9f', 'â\x80', 'Ã', 'ð']):
+        try:
+            return text.encode('latin1').decode('utf-8')
+        except Exception:
+            try:
+                return text.encode('cp1252').decode('utf-8')
+            except Exception:
+                pass
+    return text
+
 router = APIRouter()
 
 
@@ -20,7 +33,7 @@ def create_prayer(payload: PrayerRequestCreate, db: Session = Depends(get_db), c
 
     prayer = PrayerRequest(
         user_id=user_id,
-        content=payload.content,
+        content=repair_mojibake(payload.content),
         is_anonymous=payload.is_anonymous,
     )
     db.add(prayer)
@@ -38,6 +51,9 @@ def list_prayers(skip: int = 0, limit: int = 50, db: Session = Depends(get_db), 
         .limit(limit)
         .all()
     )
+    for p in prayers:
+        if p.content:
+            p.content = repair_mojibake(p.content)
     return prayers
 
 

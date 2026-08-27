@@ -72,7 +72,7 @@ def _init_firebase():
 _init_firebase()
 
 
-def send_push_notification(token: str, title: str, body: str, data: dict = None):
+def send_push_notification(token: str, title: str, body: str, data: dict = None, image: str = None):
     if not firebase_admin._apps:
         _init_firebase()
     if not firebase_admin._apps:
@@ -84,6 +84,12 @@ def send_push_notification(token: str, title: str, body: str, data: dict = None)
 
     try:
         fcm_data = {str(k): str(v) for k, v in (data or {}).items()}
+        
+        # Valid http/https image url for FCM rich notifications
+        image_url = None
+        if image and isinstance(image, str) and (image.startswith("http://") or image.startswith("https://")):
+            image_url = image
+            fcm_data["image"] = image_url
 
         android_config = messaging.AndroidConfig(
             priority='high',
@@ -92,6 +98,7 @@ def send_push_notification(token: str, title: str, body: str, data: dict = None)
                 click_action='FLUTTER_NOTIFICATION_CLICK',
                 channel_id='high_importance_channel',
                 notification_count=1,
+                image=image_url,
             )
         )
 
@@ -100,14 +107,17 @@ def send_push_notification(token: str, title: str, body: str, data: dict = None)
                 aps=messaging.Aps(
                     badge=1,
                     sound='default',
+                    mutable_content=True if image_url else False,
                 )
-            )
+            ),
+            fcm_options=messaging.APNSFCMOptions(image=image_url) if image_url else None,
         )
 
         message = messaging.Message(
             notification=messaging.Notification(
                 title=title,
                 body=body,
+                image=image_url,
             ),
             data=fcm_data,
             token=token,
@@ -120,3 +130,4 @@ def send_push_notification(token: str, title: str, body: str, data: dict = None)
     except Exception as e:
         logger.error(f"Error sending push notification: {e}")
         return False
+
