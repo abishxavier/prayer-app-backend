@@ -141,6 +141,13 @@ def _verify_membership(db: Session, chat_id: str, user_id: str):
         ChatMember.chat_id == chat_id, ChatMember.user_id == user_id
     ).first()
     if not membership:
+        chat = db.query(Chat).filter(Chat.id == chat_id).first()
+        if chat and str(chat.created_by) == str(user_id):
+            membership = ChatMember(chat_id=chat_id, user_id=user_id, role=MemberRole.admin)
+            db.add(membership)
+            db.commit()
+            db.refresh(membership)
+            return membership
         raise HTTPException(status_code=403, detail="You are not a member of this chat")
     return membership
 
@@ -730,22 +737,35 @@ async def get_members(chat_id: str, db: Session = Depends(get_db), current_user:
     user_id = current_user["sub"]
     _verify_membership(db, chat_id, user_id)
 
+    # Ensure creator is in chat_members
+    chat = db.query(Chat).filter(Chat.id == chat_id).first()
+    if chat and chat.created_by:
+        creator_exists = db.query(ChatMember).filter(
+            ChatMember.chat_id == chat_id, ChatMember.user_id == chat.created_by
+        ).first()
+        if not creator_exists:
+            creator_member = ChatMember(chat_id=chat_id, user_id=chat.created_by, role=MemberRole.admin)
+            db.add(creator_member)
+            db.commit()
+
     members = (
         db.query(ChatMember, User.name, User.phone, User.profile_image)
         .outerjoin(User, ChatMember.user_id == User.id)
         .filter(ChatMember.chat_id == chat_id)
+        .order_by(ChatMember.joined_at.asc())
         .all()
     )
     
     result = []
     for member, name, phone, profile_image in members:
+        role_val = member.role.value if hasattr(member.role, 'value') else str(member.role or 'member')
         member_dict = {
-            "id": member.id,
-            "chat_id": member.chat_id,
-            "user_id": member.user_id,
-            "role": member.role,
+            "id": str(member.id),
+            "chat_id": str(member.chat_id),
+            "user_id": str(member.user_id),
+            "role": role_val,
             "joined_at": member.joined_at,
-            "user_name": name,
+            "user_name": name or "Member",
             "user_phone": phone,
             "user_profile_image": profile_image,
         }
