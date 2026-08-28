@@ -12,6 +12,9 @@ from app.schemas.call import ScheduledCallCreate, ScheduledCallOut
 router = APIRouter()
 
 
+from app.models.chat_member import ChatMember
+from app.services.fcm import send_push_notification
+
 @router.post("/calls/scheduled", response_model=ScheduledCallOut)
 def schedule_call(payload: ScheduledCallCreate, db: Session = Depends(get_db), current_user: dict = Depends(get_current_user)):
     user_id = current_user["sub"]
@@ -33,6 +36,53 @@ def schedule_call(payload: ScheduledCallCreate, db: Session = Depends(get_db), c
     db.commit()
     db.refresh(call)
     
+    # ── Dispatch FCM Push Notification for the Video Call ──
+    try:
+        tokens_to_notify = []
+        if payload.chat_id:
+            members = db.query(ChatMember).filter(
+                ChatMember.chat_id == payload.chat_id,
+                ChatMember.user_id != user_id
+            ).all()
+            member_ids = [m.user_id for m in members]
+            target_users = db.query(User).filter(User.id.in_(member_ids)).all()
+            for u in target_users:
+                if u.device_token:
+                    tokens_to_notify.append(u.device_token)
+        else:
+            # Community-wide scheduled prayer meeting
+            target_users = db.query(User).filter(
+                User.id != user_id,
+                User.device_token.isnot(None),
+                User.device_token != ""
+            ).all()
+            for u in target_users:
+                if u.device_token:
+                    tokens_to_notify.append(u.device_token)
+
+        notif_title = f"📞 Prayer Meeting: {call.topic}"
+        notif_body = f"{user.name} scheduled a {call.call_type or 'Prayer Meeting'}. Tap to view and join!"
+        fcm_data = {
+            "type": "video_call",
+            "notification_type": "video_call",
+            "room_name": str(call.room_name),
+            "topic": str(call.topic),
+            "host_name": str(user.name or "Host"),
+            "call_type": str(call.call_type or "Prayer Meeting"),
+            "scheduled_at": call.scheduled_at.isoformat() if call.scheduled_at else "",
+            "chat_id": str(call.chat_id or ""),
+        }
+
+        for tok in set(tokens_to_notify):
+            send_push_notification(
+                token=tok,
+                title=notif_title,
+                body=notif_body,
+                data=fcm_data,
+            )
+    except Exception as e:
+        print(f"Error dispatching video call notification: {e}")
+
     return ScheduledCallOut(
         id=call.id,
         topic=call.topic,
@@ -213,4 +263,65 @@ def update_meeting_intention(
             return MeetingIntentionOut(**item)
 
     raise HTTPException(status_code=404, detail="Intention not found")
+
+
+@router.post("/calls/{room_name}/ring")
+def ring_meeting_call(
+    room_name: str,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    user_id = current_user["sub"]
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    call = db.query(ScheduledCall).filter(ScheduledCall.room_name == room_name).first()
+    topic = call.topic if call else "Prayer Meeting"
+    call_type = call.call_type if call else "Video Call"
+    chat_id = call.chat_id if call else None
+
+    tokens_to_notify = []
+    if chat_id:
+        members = db.query(ChatMember).filter(
+            ChatMember.chat_id == chat_id,
+            ChatMember.user_id != user_id
+        ).all()
+        member_ids = [m.user_id for m in members]
+        target_users = db.query(User).filter(User.id.in_(member_ids)).all()
+        for u in target_users:
+            if u.device_token:
+                tokens_to_notify.append(u.device_token)
+    else:
+        target_users = db.query(User).filter(
+            User.id != user_id,
+            User.device_token.isnot(None),
+            User.device_token != ""
+        ).all()
+        for u in target_users:
+            if u.device_token:
+                tokens_to_notify.append(u.device_token)
+
+    notif_title = f"📞 Live Prayer Meeting: {topic}"
+    notif_body = f"{user.name} is calling you to join the {call_type} now!"
+    fcm_data = {
+        "type": "video_call",
+        "notification_type": "video_call",
+        "room_name": room_name,
+        "topic": topic,
+        "host_name": user.name or "Host",
+        "call_type": call_type,
+        "chat_id": chat_id or "",
+    }
+
+    sent_count = 0
+    for tok in set(tokens_to_notify):
+        try:
+            if send_push_notification(token=tok, title=notif_title, body=notif_body, data=fcm_data):
+                sent_count += 1
+        except Exception as e:
+            print(f"Error ringing video call: {e}")
+
+    return {"status": "ok", "notified_count": sent_count}
+
 
