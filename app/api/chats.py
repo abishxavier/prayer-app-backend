@@ -142,13 +142,25 @@ def _verify_membership(db: Session, chat_id: str, user_id: str):
     ).first()
     if not membership:
         chat = db.query(Chat).filter(Chat.id == chat_id).first()
-        if chat and str(chat.created_by) == str(user_id):
-            membership = ChatMember(chat_id=chat_id, user_id=user_id, role=MemberRole.admin)
+        if not chat:
+            raise HTTPException(status_code=404, detail="Chat not found")
+        
+        # Auto-heal membership: If creator, make admin; otherwise add as member
+        role = MemberRole.admin if str(chat.created_by) == str(user_id) else MemberRole.member
+        try:
+            membership = ChatMember(chat_id=chat_id, user_id=user_id, role=role)
             db.add(membership)
             db.commit()
             db.refresh(membership)
             return membership
-        raise HTTPException(status_code=403, detail="You are not a member of this chat")
+        except Exception:
+            db.rollback()
+            existing = db.query(ChatMember).filter(
+                ChatMember.chat_id == chat_id, ChatMember.user_id == user_id
+            ).first()
+            if existing:
+                return existing
+            raise HTTPException(status_code=403, detail="You are not a member of this chat")
     return membership
 
 
@@ -359,6 +371,23 @@ async def list_my_chats(db: Session = Depends(get_db), current_user: dict = Depe
     my_memberships = db.query(ChatMember).filter(ChatMember.user_id == user_id).all()
     chat_ids = [m.chat_id for m in my_memberships]
     
+    # 1b. Auto-include all community group chats for every user so groups never disappear
+    try:
+        group_chats = db.query(Chat).filter(Chat.type.in_([ChatType.group, "group"])).all()
+        for gc in group_chats:
+            if gc.id not in chat_ids:
+                try:
+                    role = MemberRole.admin if str(gc.created_by) == str(user_id) else MemberRole.member
+                    cm = ChatMember(chat_id=gc.id, user_id=user_id, role=role)
+                    db.add(cm)
+                    db.commit()
+                    chat_ids.append(gc.id)
+                except Exception:
+                    db.rollback()
+                    chat_ids.append(gc.id)
+    except Exception:
+        db.rollback()
+
     if not chat_ids:
         return []
 

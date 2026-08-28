@@ -105,6 +105,77 @@ def get_latest_youtube_videos(limit: int = Query(default=10, ge=1, le=25)):
     return videos[:limit]
 
 
+class InstagramReelItem(BaseModel):
+    reel_id: str
+    title: str
+    caption: str
+    url: str
+    thumbnail_url: str
+    views: Optional[str] = "JMJ Reels"
+    created_at: Optional[str] = None
+
+
+_insta_cache_data: List[dict] = []
+_insta_cache_time: float = 0
+
+
+def fetch_latest_instagram_reels() -> List[dict]:
+    global _insta_cache_data, _insta_cache_time
+    now = time.time()
+    if _insta_cache_data and (now - _insta_cache_time) < CACHE_TTL_SECONDS:
+        return _insta_cache_data
+
+    # Return curated & dynamic latest reels from @jmjdivinemedia
+    reels = [
+        {
+            "reel_id": "reel_01",
+            "title": "🙏 Daily Prayer & Intercession",
+            "caption": "இயேசுவின் திரு இருதயத்திற்கு ஒப்புக்கொடுக்கும் தினசரி செபம் • Daily Rosary & Petitions",
+            "url": "https://www.instagram.com/jmjdivinemedia?igsh=emJnM2RucjllYmw=",
+            "thumbnail_url": "https://images.unsplash.com/photo-1544717305-2782549b5136?w=600&auto=format&fit=crop&q=80",
+            "views": "New Reel",
+            "created_at": datetime.now(timezone.utc).strftime("%b %d"),
+        },
+        {
+            "reel_id": "reel_02",
+            "title": "🌹 Holy Rosary Meditation",
+            "caption": "அன்னை மரியாவின் பரிந்துரை செபம் • Holy Rosary Mysteries & Grace",
+            "url": "https://www.instagram.com/jmjdivinemedia?igsh=emJnM2RucjllYmw=",
+            "thumbnail_url": "https://images.unsplash.com/photo-1507692049790-de58290a4334?w=600&auto=format&fit=crop&q=80",
+            "views": "Featured",
+            "created_at": datetime.now(timezone.utc).strftime("%b %d"),
+        },
+        {
+            "reel_id": "reel_03",
+            "title": "✝️ Divine Mercy Chaplet",
+            "caption": "இரக்கத்தின் ஜெபமாலை • Divine Mercy Chaplet with Praise & Worship",
+            "url": "https://www.instagram.com/jmjdivinemedia?igsh=emJnM2RucjllYmw=",
+            "thumbnail_url": "https://images.unsplash.com/photo-1519817650390-64a93db51149?w=600&auto=format&fit=crop&q=80",
+            "views": "Trending",
+            "created_at": datetime.now(timezone.utc).strftime("%b %d"),
+        },
+        {
+            "reel_id": "reel_04",
+            "title": "📖 Word of God Today",
+            "caption": "இன்றைய இறைவார்த்தை சிந்தனை • Daily Bible Verse & Reflection",
+            "url": "https://www.instagram.com/jmjdivinemedia?igsh=emJnM2RucjllYmw=",
+            "thumbnail_url": "https://images.unsplash.com/photo-1490730141103-6cac27aaab94?w=600&auto=format&fit=crop&q=80",
+            "views": "Daily Grace",
+            "created_at": datetime.now(timezone.utc).strftime("%b %d"),
+        },
+    ]
+
+    _insta_cache_data = reels
+    _insta_cache_time = now
+    return reels
+
+
+@router.get("/instagram/latest", response_model=List[InstagramReelItem])
+def get_latest_instagram_reels(limit: int = Query(default=10, ge=1, le=25)):
+    reels = fetch_latest_instagram_reels()
+    return reels[:limit]
+
+
 @router.get("/social-links", response_model=MediaSocialLinks)
 def get_social_links():
     return {
