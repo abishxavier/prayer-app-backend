@@ -17,6 +17,24 @@ def get_monthly_plans(db: Session = Depends(get_db)):
     return plans
 
 from app.models.user import User
+from app.models.call import ScheduledCall
+from app.services.fcm import send_push_notification
+from datetime import datetime, timezone
+
+def _parse_plan_datetime(date_str: str, time_str: str) -> datetime:
+    """Parses date (YYYY-MM-DD) and time (e.g. 07:00 PM, 19:00, 7:30 AM) into a UTC datetime."""
+    try:
+        time_clean = (time_str or "").strip()
+        for fmt in ["%Y-%m-%d %I:%M %p", "%Y-%m-%d %I:%M%p", "%Y-%m-%d %H:%M", "%Y-%m-%d %H:%M:%S"]:
+            try:
+                dt = datetime.strptime(f"{date_str} {time_clean}", fmt)
+                return dt.replace(tzinfo=timezone.utc)
+            except ValueError:
+                pass
+    except Exception:
+        pass
+    return datetime.now(timezone.utc)
+
 
 @router.post("", response_model=MonthlyPlanOut)
 def create_monthly_plan(
@@ -24,13 +42,14 @@ def create_monthly_plan(
     db: Session = Depends(get_db),
     current_user: dict = Depends(get_current_user)
 ):
-    """Create a new monthly plan."""
+    """Create a new monthly plan and automatically schedule a video call meeting."""
     user_id = current_user["sub"]
     user = db.query(User).filter(User.id == user_id).first()
     valid_creator_id = user.id if user else None
 
+    plan_id = f"plan_{uuid.uuid4().hex[:12]}"
     plan = MonthlyPlan(
-        id=f"plan_{uuid.uuid4().hex[:12]}",
+        id=plan_id,
         title=payload.title,
         tamil_title=payload.tamil_title or payload.title,
         category=payload.category,
@@ -46,7 +65,55 @@ def create_monthly_plan(
     db.add(plan)
     db.commit()
     db.refresh(plan)
+
+    # Automatically create the corresponding Scheduled Video Call meeting
+    try:
+        scheduled_dt = _parse_plan_datetime(payload.date, payload.time)
+        room_name = f"meeting_{plan_id}"
+
+        call = ScheduledCall(
+            topic=payload.title,
+            description=payload.notes or f"Calendar Plan: {payload.category or 'Prayer Meeting'}",
+            call_type=payload.category or "Prayer Meeting",
+            room_name=room_name,
+            host_id=valid_creator_id or user_id,
+            chat_id=None,
+            scheduled_at=scheduled_dt
+        )
+        db.add(call)
+        db.commit()
+        db.refresh(call)
+
+        # Dispatch FCM Push Notification to all community members
+        target_users = db.query(User).filter(
+            User.id != user_id,
+            User.device_token.isnot(None),
+            User.device_token != ""
+        ).all()
+
+        host_name = user.name if user and user.name else "Community Leader"
+        notif_title = f"📅 New Meeting Scheduled: {payload.title}"
+        notif_body = f"{host_name} scheduled a {payload.category or 'Prayer Meeting'} for {payload.date} at {payload.time}."
+
+        for u in target_users:
+            if u.device_token:
+                send_push_notification(
+                    token=u.device_token,
+                    title=notif_title,
+                    body=notif_body,
+                    data={
+                        "type": "video_call",
+                        "notification_type": "video_call",
+                        "room_name": str(room_name),
+                        "topic": str(payload.title),
+                        "host_name": str(host_name),
+                    }
+                )
+    except Exception as e:
+        print(f"Note on auto-scheduling call for plan: {e}")
+
     return plan
+
 
 @router.put("/{plan_id}", response_model=MonthlyPlanOut)
 def update_monthly_plan(
@@ -55,7 +122,7 @@ def update_monthly_plan(
     db: Session = Depends(get_db),
     current_user: dict = Depends(get_current_user)
 ):
-    """Update an existing monthly plan."""
+    """Update an existing monthly plan and sync its scheduled video call."""
     plan = db.query(MonthlyPlan).filter(MonthlyPlan.id == plan_id).first()
     if not plan:
         raise HTTPException(status_code=404, detail="Plan not found")
@@ -66,7 +133,28 @@ def update_monthly_plan(
 
     db.commit()
     db.refresh(plan)
+
+    # Sync linked ScheduledCall if any
+    try:
+        room_name = f"meeting_{plan_id}"
+        linked_call = db.query(ScheduledCall).filter(ScheduledCall.room_name == room_name).first()
+        if linked_call:
+            if payload.title is not None:
+                linked_call.topic = payload.title
+            if payload.notes is not None:
+                linked_call.description = payload.notes
+            if payload.category is not None:
+                linked_call.call_type = payload.category
+            if payload.date is not None or payload.time is not None:
+                d = payload.date if payload.date is not None else plan.date
+                t = payload.time if payload.time is not None else plan.time
+                linked_call.scheduled_at = _parse_plan_datetime(d, t)
+            db.commit()
+    except Exception as e:
+        print(f"Note on updating linked call: {e}")
+
     return plan
+
 
 @router.delete("/{plan_id}")
 def delete_monthly_plan(
@@ -74,10 +162,17 @@ def delete_monthly_plan(
     db: Session = Depends(get_db),
     current_user: dict = Depends(get_current_user)
 ):
-    """Delete a monthly plan."""
+    """Delete a monthly plan and its scheduled video call."""
     plan = db.query(MonthlyPlan).filter(MonthlyPlan.id == plan_id).first()
     if not plan:
         raise HTTPException(status_code=404, detail="Plan not found")
+
+    # Delete linked ScheduledCall if any
+    try:
+        room_name = f"meeting_{plan_id}"
+        db.query(ScheduledCall).filter(ScheduledCall.room_name == room_name).delete()
+    except Exception as e:
+        print(f"Note on deleting linked call: {e}")
 
     db.delete(plan)
     db.commit()
