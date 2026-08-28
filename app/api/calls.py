@@ -325,3 +325,53 @@ def ring_meeting_call(
     return {"status": "ok", "notified_count": sent_count}
 
 
+@router.post("/calls/{room_name}/missed")
+def record_missed_call(
+    room_name: str,
+    target_user_id: str = None,
+    topic: str = "Video Call",
+    chat_id: str = None,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    caller_id = current_user["sub"]
+    caller = db.query(User).filter(User.id == caller_id).first()
+    caller_name = caller.name if caller else "Someone"
+
+    # Log missed call
+    if target_user_id:
+        log = CallLog(
+            caller_id=caller_id,
+            receiver_id=target_user_id,
+            status="missed",
+            duration=0,
+            room_name=room_name,
+            call_type="video",
+            chat_id=chat_id,
+        )
+        db.add(log)
+        db.commit()
+
+        target_user = db.query(User).filter(User.id == target_user_id).first()
+        if target_user and target_user.device_token:
+            send_push_notification(
+                token=target_user.device_token,
+                title="Missed video call",
+                body=f"{caller_name} called you",
+                image=caller.profile_image if caller else None,
+                data={
+                    "type": "missed_call",
+                    "notification_type": "missed_call",
+                    "caller_id": str(caller_id),
+                    "caller_name": caller_name,
+                    "caller_image": caller.profile_image or "",
+                    "room_name": room_name,
+                    "chat_id": str(chat_id or ""),
+                    "topic": topic,
+                }
+            )
+
+    return {"status": "ok"}
+
+
+

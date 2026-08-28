@@ -15,7 +15,7 @@ from app.models.call import ScheduledCall
 from app.schemas.chat import (
     ChatCreate, ChatOut, ChatMemberAdd, ChatMemberOut, ChatUpdate, ChatMemberRoleUpdate
 )
-from app.schemas.message import MessageCreate, MessageOut, MessageUpdate
+from app.schemas.message import MessageCreate, MessageOut, MessageUpdate, ReactionCreate
 from app.services.fcm import send_push_notification
 
 import re
@@ -802,6 +802,8 @@ async def get_messages(chat_id: str, skip: int = 0, limit: int = 100, db: Sessio
             "is_edited": msg.is_edited,
             "is_deleted": msg.is_deleted,
             "is_read": msg.is_read,
+            "reaction": getattr(msg, 'reaction', None),
+            "reply_to_id": getattr(msg, 'reply_to_id', None),
             "created_at": msg.created_at,
             "sender_name": name,
             "sender_image": profile_image,
@@ -827,7 +829,6 @@ async def send_message(chat_id: str, payload: MessageCreate, db: Session = Depen
     if chat and (chat.type == ChatType.direct or getattr(chat.type, 'value', '') == 'direct'):
         other_member = db.query(ChatMember).filter(ChatMember.chat_id == chat_id, ChatMember.user_id != user_id).first()
         if other_member:
-            # 1. Did the other member block the sender?
             is_blocked_by_them = db.query(BlockedUser).filter(
                 BlockedUser.user_id == other_member.user_id,
                 BlockedUser.blocked_user_id == user_id
@@ -835,7 +836,6 @@ async def send_message(chat_id: str, payload: MessageCreate, db: Session = Depen
             if is_blocked_by_them:
                 raise HTTPException(status_code=403, detail="You cannot send messages to this contact")
 
-            # 2. Did the sender block the other member?
             is_blocked_by_me = db.query(BlockedUser).filter(
                 BlockedUser.user_id == user_id,
                 BlockedUser.blocked_user_id == other_member.user_id
@@ -849,6 +849,7 @@ async def send_message(chat_id: str, payload: MessageCreate, db: Session = Depen
         sender_id=user_id,
         content=clean_content,
         message_type=payload.message_type,
+        reply_to_id=payload.reply_to_id,
     )
     db.add(message)
     db.commit()
@@ -872,6 +873,8 @@ async def send_message(chat_id: str, payload: MessageCreate, db: Session = Depen
                 "is_edited": message.is_edited,
                 "is_deleted": message.is_deleted,
                 "is_read": message.is_read,
+                "reaction": message.reaction,
+                "reply_to_id": message.reply_to_id,
                 "created_at": message.created_at.isoformat(),
                 "sender_name": user.name if user else None,
                 "sender_image": sender_profile_img,
@@ -888,48 +891,71 @@ async def send_message(chat_id: str, payload: MessageCreate, db: Session = Depen
         is_group = (chat_type_str == 'group' or (chat and chat.type == ChatType.group) or (chat and chat.type == "group"))
         notification_avatar = group_avatar_img if (is_group and group_avatar_img) else sender_profile_img
 
+        raw_content = message.content or ""
+        msg_type_str = str(message.message_type.value if hasattr(message.message_type, 'value') else message.message_type)
+        
+        if raw_content.startswith("data:image"):
+            body_preview = "📷 Photo"
+        elif raw_content.startswith("data:audio") or msg_type_str == "audio" or "Voice Note" in raw_content or "Voice note" in raw_content or raw_content.startswith("🎙"):
+            body_preview = "🎙️ Voice note"
+        elif raw_content.startswith("data:video") or "video" in raw_content.lower():
+            body_preview = "🎥 Video"
+        elif raw_content.startswith("🙏 Prayer Request:") or raw_content.startswith("🙏 Please pray for:"):
+            body_preview = "🙏 Prayer Petition"
+        else:
+            body_preview = raw_content if len(raw_content) < 100 else raw_content[:97] + "..."
+
+        sender_display_name = user.name if user and user.name else "Someone"
+
+        # Check if this is a reply to another member's message
+        replied_msg = None
+        if payload.reply_to_id:
+            replied_msg = db.query(Message).filter(Message.id == payload.reply_to_id).first()
+
         for member in members:
             member_user = db.query(User).filter(User.id == member.user_id).first()
-            if member_user and member_user.device_token:
-                sender_display_name = user.name if user and user.name else "Someone"
+            if not member_user or not member_user.device_token:
+                continue
+
+            notif_type = "message"
+            # 1. Reply Notification
+            if replied_msg and str(replied_msg.sender_id) == str(member.user_id):
+                notif_type = "group_reply" if is_group else "reply"
+                title = f"{sender_display_name} in {chat_name}" if is_group else sender_display_name
+                body = f"{sender_display_name} replied to your message: \"{body_preview}\""
+            # 2. Mention Notification (@MemberName)
+            elif member_user.name and f"@{member_user.name.lower()}" in raw_content.lower():
+                notif_type = "mention"
+                title = f"Mentioned in {chat_name}" if is_group else f"{sender_display_name} mentioned you"
+                body = f"{sender_display_name} mentioned you: \"{body_preview}\""
+            # 3. Standard Message Notification
+            else:
                 if is_group:
-                    title = f"{sender_display_name} in {chat_name}"
+                    title = chat_name
+                    body = f"{sender_display_name}: {body_preview}"
                 else:
                     title = sender_display_name
+                    body = body_preview
 
-                raw_content = message.content or ""
-                msg_type_str = str(message.message_type.value if hasattr(message.message_type, 'value') else message.message_type)
-                
-                if raw_content.startswith("data:image"):
-                    body_preview = "📷 Photo"
-                elif raw_content.startswith("data:audio") or msg_type_str == "audio" or "Voice Note" in raw_content or "Voice note" in raw_content or raw_content.startswith("🎙"):
-                    body_preview = "🎙️ Voice note"
-                elif raw_content.startswith("data:video") or "video" in raw_content.lower():
-                    body_preview = "🎥 Video"
-                elif raw_content.startswith("🙏 Prayer Request:") or raw_content.startswith("🙏 Please pray for:"):
-                    body_preview = "🙏 Prayer Petition"
-                else:
-                    body_preview = raw_content if len(raw_content) < 100 else raw_content[:97] + "..."
-
-                send_push_notification(
-                    token=member_user.device_token,
-                    title=title,
-                    body=body_preview,
-                    image=notification_avatar,
-                    data={
-                        "chat_id": str(chat_id),
-                        "chat_name": chat_name,
-                        "is_group": "true" if is_group else "false",
-                        "sender_id": str(user_id),
-                        "sender_name": sender_display_name,
-                        "sender_image": sender_profile_img or "",
-                        "profile_image": notification_avatar or sender_profile_img or "",
-                        "group_image": group_avatar_img or "",
-                        "other_member_id": str(user_id),
-                        "type": "message"
-                    }
-                )
-    except Exception as e:
+            send_push_notification(
+                token=member_user.device_token,
+                title=title,
+                body=body,
+                image=notification_avatar,
+                data={
+                    "chat_id": str(chat_id),
+                    "chat_name": chat_name,
+                    "is_group": "true" if is_group else "false",
+                    "sender_id": str(user_id),
+                    "sender_name": sender_display_name,
+                    "sender_image": sender_profile_img or "",
+                    "profile_image": notification_avatar or sender_profile_img or "",
+                    "group_image": group_avatar_img or "",
+                    "message_id": str(message.id),
+                    "type": notif_type
+                }
+            )
+    except Exception:
         pass
 
     return {
@@ -941,11 +967,79 @@ async def send_message(chat_id: str, payload: MessageCreate, db: Session = Depen
         "is_edited": message.is_edited,
         "is_deleted": message.is_deleted,
         "is_read": message.is_read,
+        "reaction": message.reaction,
+        "reply_to_id": message.reply_to_id,
         "created_at": message.created_at,
         "sender_name": user.name if user else None,
         "sender_image": user.profile_image if user else None,
         "sender_phone": user.phone if user else None,
     }
+
+
+@router.post("/chats/{chat_id}/messages/{message_id}/react")
+async def react_to_message(chat_id: str, message_id: str, payload: ReactionCreate, db: Session = Depends(get_db), current_user: dict = Depends(get_current_user)):
+    user_id = current_user["sub"]
+    _verify_membership(db, chat_id, user_id)
+
+    message = db.query(Message).filter(Message.id == message_id, Message.chat_id == chat_id).first()
+    if not message:
+        raise HTTPException(status_code=404, detail="Message not found")
+
+    message.reaction = payload.emoji
+    db.commit()
+    db.refresh(message)
+
+    user = db.query(User).filter(User.id == user_id).first()
+    user_name = user.name if user else "Someone"
+
+    # Broadcast reaction in chat room
+    try:
+        await manager.broadcast(chat_id, {
+            "type": "reaction",
+            "data": {
+                "message_id": str(message.id),
+                "chat_id": str(chat_id),
+                "reaction": payload.emoji,
+                "user_id": str(user_id),
+                "user_name": user_name,
+            }
+        })
+    except Exception:
+        pass
+
+    # Push notification to the original message author (if not reacting to self)
+    if str(message.sender_id) != str(user_id):
+        try:
+            author = db.query(User).filter(User.id == message.sender_id).first()
+            if author and author.device_token:
+                chat = db.query(Chat).filter(Chat.id == chat_id).first()
+                chat_name = chat.name if chat and chat.name else "Chat"
+                
+                snippet = message.content or ""
+                if snippet.startswith("data:image"):
+                    snippet = "photo"
+                elif snippet.startswith("data:audio"):
+                    snippet = "voice note"
+                elif len(snippet) > 60:
+                    snippet = snippet[:57] + "..."
+
+                send_push_notification(
+                    token=author.device_token,
+                    title=f"{user_name} reacted {payload.emoji} in {chat_name}" if (chat and chat.type == ChatType.group) else f"{user_name} reacted {payload.emoji}",
+                    body=f"{user_name} reacted {payload.emoji} to: \"{snippet}\"",
+                    image=user.profile_image if user else None,
+                    data={
+                        "chat_id": str(chat_id),
+                        "chat_name": chat_name,
+                        "message_id": str(message.id),
+                        "emoji": payload.emoji,
+                        "type": "reaction"
+                    }
+                )
+        except Exception:
+            pass
+
+    return {"status": "ok", "reaction": payload.emoji, "message_id": str(message.id)}
 
 
 @router.put("/chats/{chat_id}/messages/{message_id}", response_model=MessageOut)

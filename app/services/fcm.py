@@ -84,6 +84,7 @@ def send_push_notification(token: str, title: str, body: str, data: dict = None,
 
     try:
         fcm_data = {str(k): str(v) for k, v in (data or {}).items()}
+        notif_type = fcm_data.get("type") or fcm_data.get("notification_type") or "message"
         
         # Valid http/https image url for FCM rich notifications
         image_url = None
@@ -91,14 +92,20 @@ def send_push_notification(token: str, title: str, body: str, data: dict = None,
             image_url = image
             fcm_data["image"] = image_url
 
+        # Channel selection: Calls use high priority call channel with ringtone
+        is_call = (notif_type in ["video_call", "incoming_call", "call"])
+        channel_id = 'video_call_channel' if is_call else 'high_importance_channel'
+        tag = fcm_data.get("chat_id") or ("call_" + fcm_data.get("room_name", "")) if not is_call else None
+
         android_config = messaging.AndroidConfig(
             priority='high',
             notification=messaging.AndroidNotification(
                 sound='default',
                 click_action='FLUTTER_NOTIFICATION_CLICK',
-                channel_id='high_importance_channel',
+                channel_id=channel_id,
                 notification_count=1,
                 image=image_url,
+                tag=tag,
             )
         )
 
@@ -125,7 +132,7 @@ def send_push_notification(token: str, title: str, body: str, data: dict = None,
             apns=apns_config,
         )
         response = messaging.send(message)
-        logger.info(f"Push notification sent: {response}")
+        logger.info(f"Push notification sent [{notif_type}]: {response}")
         return True
     except Exception as e:
         logger.error(f"Error sending push notification: {e}")

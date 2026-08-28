@@ -56,6 +56,11 @@ def run_migrations():
                 conn.execute(text("ALTER TYPE messagetype ADD VALUE IF NOT EXISTS 'video'"))
             except Exception:
                 pass
+            try:
+                conn.execute(text("ALTER TABLE messages ADD COLUMN IF NOT EXISTS reaction VARCHAR(50);"))
+                conn.execute(text("ALTER TABLE messages ADD COLUMN IF NOT EXISTS reply_to_id VARCHAR(100);"))
+            except Exception as e:
+                print(f"Note on adding reaction/reply_to_id columns: {e}")
     except Exception as e:
         print(f"Schema update note (non-fatal): {e}")
 
