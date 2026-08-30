@@ -1,5 +1,5 @@
 import uuid
-from sqlalchemy import Column, String, DateTime, ForeignKey
+from sqlalchemy import Column, String, DateTime, ForeignKey, Boolean
 from sqlalchemy.sql import func
 
 from app.db.session import Base
@@ -15,6 +15,7 @@ class ScheduledCall(Base):
     host_id = Column(String, ForeignKey("users.id"), nullable=False)
     chat_id = Column(String, ForeignKey("chats.id"), nullable=True)
     scheduled_at = Column(DateTime(timezone=True), nullable=False)
+    is_rung = Column(Boolean, default=False, nullable=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
 class CallLog(Base):

@@ -61,6 +61,11 @@ def run_migrations():
                 conn.execute(text("ALTER TABLE messages ADD COLUMN IF NOT EXISTS reply_to_id VARCHAR(100);"))
             except Exception as e:
                 print(f"Note on adding reaction/reply_to_id columns: {e}")
+            try:
+                conn.execute(text("ALTER TABLE scheduled_calls ADD COLUMN IF NOT EXISTS is_rung BOOLEAN DEFAULT FALSE;"))
+                print("PostgreSQL scheduled_calls.is_rung ensured successfully!")
+            except Exception as e:
+                print(f"Note on adding scheduled_calls.is_rung: {e}")
     except Exception as e:
         print(f"Schema update note (non-fatal): {e}")
 
@@ -72,6 +77,14 @@ class UTF8JSONResponse(JSONResponse):
     media_type = "application/json; charset=utf-8"
 
 app = FastAPI(title="Prayer App API", default_response_class=UTF8JSONResponse)
+
+import asyncio
+from app.services.call_scheduler import scheduled_call_ringer_worker
+
+@app.on_event("startup")
+async def on_startup():
+    # Start background auto-ringer task to ring all app users at scheduled meeting times
+    asyncio.create_task(scheduled_call_ringer_worker())
 
 from fastapi.middleware.cors import CORSMiddleware
 
