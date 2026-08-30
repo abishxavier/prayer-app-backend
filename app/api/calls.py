@@ -60,11 +60,11 @@ def schedule_call(payload: ScheduledCallCreate, db: Session = Depends(get_db), c
                 if u.device_token:
                     tokens_to_notify.append(u.device_token)
 
-        notif_title = f"📞 Prayer Meeting: {call.topic}"
-        notif_body = f"{user.name} scheduled a {call.call_type or 'Prayer Meeting'}. Tap to view and join!"
+        notif_title = f"📅 Prayer Meeting Scheduled: {call.topic}"
+        notif_body = f"{user.name} scheduled a {call.call_type or 'Prayer Meeting'}. Tap to view details!"
         fcm_data = {
-            "type": "video_call",
-            "notification_type": "video_call",
+            "type": "meeting_scheduled",
+            "notification_type": "meeting_scheduled",
             "room_name": str(call.room_name),
             "topic": str(call.topic),
             "host_name": str(user.name or "Host"),
@@ -81,7 +81,7 @@ def schedule_call(payload: ScheduledCallCreate, db: Session = Depends(get_db), c
                 data=fcm_data,
             )
     except Exception as e:
-        print(f"Error dispatching video call notification: {e}")
+        print(f"Error dispatching scheduled call notification: {e}")
 
     return ScheduledCallOut(
         id=call.id,
