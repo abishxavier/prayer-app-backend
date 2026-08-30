@@ -11,7 +11,7 @@ router = APIRouter(prefix="/media", tags=["Media"])
 
 CHANNEL_ID = "UCQQXwB0KlRhd_Zi0jv7XYfQ"
 YOUTUBE_RSS_URL = f"https://www.youtube.com/feeds/videos.xml?channel_id={CHANNEL_ID}"
-INSTAGRAM_PAGE_URL = "https://www.instagram.com/jmjdivinemedia?igsh=emJnM2RucjllYmw="
+INSTAGRAM_PAGE_URL = "https://www.instagram.com/jmjdivinemedia?igsi=emJnM2RucjllYmw="
 YOUTUBE_CHANNEL_URL = "https://www.youtube.com/@jmjdivinemedia"
 
 _cache_data: List[dict] = []
@@ -174,6 +174,14 @@ def fetch_latest_instagram_reels() -> List[dict]:
 def get_latest_instagram_reels(limit: int = Query(default=10, ge=1, le=25)):
     reels = fetch_latest_instagram_reels()
     return reels[:limit]
+
+
+@router.get("/instagram/latest-url")
+def get_latest_instagram_url():
+    return {
+        "reels_url": "https://www.instagram.com/jmjdivinemedia/reels/",
+        "page_url": INSTAGRAM_PAGE_URL,
+    }
 
 
 @router.get("/social-links", response_model=MediaSocialLinks)

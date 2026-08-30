@@ -96,11 +96,13 @@ def send_push_notification(token: str, title: str, body: str, data: dict = None,
         is_call = (notif_type in ["video_call", "incoming_call", "call"])
         channel_id = 'video_call_channel' if is_call else 'high_importance_channel'
         tag = fcm_data.get("chat_id") or ("call_" + fcm_data.get("room_name", "")) if not is_call else None
+        call_sound = 'ringtone' if is_call else 'default'
+        apns_sound = 'ringtone.wav' if is_call else 'default'
 
         android_config = messaging.AndroidConfig(
             priority='high',
             notification=messaging.AndroidNotification(
-                sound='default',
+                sound=call_sound,
                 click_action='FLUTTER_NOTIFICATION_CLICK',
                 channel_id=channel_id,
                 notification_count=1,
@@ -113,7 +115,7 @@ def send_push_notification(token: str, title: str, body: str, data: dict = None,
             payload=messaging.APNSPayload(
                 aps=messaging.Aps(
                     badge=1,
-                    sound='default',
+                    sound=apns_sound,
                     mutable_content=True if image_url else False,
                 )
             ),
