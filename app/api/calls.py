@@ -22,6 +22,18 @@ def schedule_call(payload: ScheduledCallCreate, db: Session = Depends(get_db), c
     user = db.query(User).filter(User.id == user_id).first()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
+
+    # Validate that scheduled_at is in the future
+    now_utc = datetime.now(timezone.utc)
+    sched_utc = payload.scheduled_at
+    if sched_utc.tzinfo is None:
+        sched_utc = sched_utc.replace(tzinfo=timezone.utc)
+
+    if (sched_utc - now_utc).total_seconds() < -300:
+        raise HTTPException(
+            status_code=400,
+            detail="Cannot schedule a meeting in the past. Please select a future date and time."
+        )
         
     call = ScheduledCall(
         topic=payload.topic,
@@ -30,7 +42,7 @@ def schedule_call(payload: ScheduledCallCreate, db: Session = Depends(get_db), c
         room_name=payload.room_name,
         host_id=user_id,
         chat_id=payload.chat_id,
-        scheduled_at=payload.scheduled_at
+        scheduled_at=sched_utc
     )
     db.add(call)
     db.commit()
