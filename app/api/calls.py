@@ -97,14 +97,47 @@ def schedule_call(payload: ScheduledCallCreate, db: Session = Depends(get_db), c
     )
 
 
+# --- Live Group Video Call Participants & Lifetime Stats Store ---
+_live_meeting_intentions: dict[str, list[dict]] = {}
+_live_call_participants: dict[str, dict[int, dict]] = {}
+_room_lifetime_stats: dict[str, dict] = {}
+
+
 @router.get("/calls/scheduled", response_model=List[ScheduledCallOut])
 def get_scheduled_calls(db: Session = Depends(get_db), current_user: dict = Depends(get_current_user)):
     # Order by newest created / scheduled first so latest meetings appear at the top
     calls = db.query(ScheduledCall).order_by(ScheduledCall.created_at.desc(), ScheduledCall.scheduled_at.desc()).all()
+    now = datetime.now(timezone.utc)
     
     result = []
     for call in calls:
         host = db.query(User).filter(User.id == call.host_id).first()
+        room = call.room_name or ""
+        
+        # Clean stale participants
+        room_dict = _live_call_participants.get(room, {})
+        stale_uids = [uid for uid, p in room_dict.items() if (now - p.get("last_seen", now)).total_seconds() >= 120]
+        for uid in stale_uids:
+            room_dict.pop(uid, None)
+            
+        active_count = len(room_dict)
+        stats = _room_lifetime_stats.get(room, {"total_joined": active_count, "left_count": 0})
+        total_joined = max(stats.get("total_joined", 0), active_count)
+        left_count = max(0, total_joined - active_count)
+
+        # Time gating calculation:
+        # User can only join starting 10 minutes before scheduled_at until 90 minutes after scheduled_at
+        scheduled_utc = call.scheduled_at
+        if scheduled_utc.tzinfo is None:
+            scheduled_utc = scheduled_utc.replace(tzinfo=timezone.utc)
+            
+        diff_seconds = (scheduled_utc - now).total_seconds()
+        minutes_until = int(diff_seconds // 60)
+        
+        is_expired = diff_seconds < -5400  # More than 90 minutes past scheduled time
+        is_live = (-5400 <= diff_seconds <= 600) and not is_expired  # Within 10 mins before or during meeting
+        can_join = is_live and not is_expired
+
         result.append(ScheduledCallOut(
             id=call.id,
             topic=call.topic,
@@ -115,7 +148,14 @@ def get_scheduled_calls(db: Session = Depends(get_db), current_user: dict = Depe
             host_id=call.host_id,
             host_name=host.name if host else "Unknown",
             scheduled_at=call.scheduled_at,
-            created_at=call.created_at
+            created_at=call.created_at,
+            active_participants_count=active_count,
+            total_joined_count=total_joined,
+            left_count=left_count,
+            can_join=can_join,
+            is_live=is_live,
+            is_expired=is_expired,
+            minutes_until=minutes_until
         ))
         
     return result
@@ -192,9 +232,90 @@ def get_call_history(db: Session = Depends(get_db), current_user: dict = Depends
 
 # --- Live Group Video Call Prayer Intentions (In-Memory Fast Store with Room Scoping) ---
 import uuid
-from app.schemas.call import MeetingIntentionCreate, MeetingIntentionUpdate, MeetingIntentionOut
+from app.schemas.call import (
+    MeetingIntentionCreate,
+    MeetingIntentionUpdate,
+    MeetingIntentionOut,
+    CallParticipantRegister,
+    CallParticipantOut,
+)
 
-_live_meeting_intentions: dict[str, list[dict]] = {}
+
+@router.post("/calls/{room_name}/participants")
+def register_call_participant(
+    room_name: str,
+    payload: CallParticipantRegister,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    user_id = current_user["sub"]
+    user = db.query(User).filter(User.id == user_id).first()
+    user_name = (payload.name or (user.name if user else "Participant")).strip()
+    user_photo = payload.photo or (user.profile_image if user else None)
+
+    if room_name not in _live_call_participants:
+        _live_call_participants[room_name] = {}
+
+    participant_data = {
+        "uid": payload.uid,
+        "user_id": str(user_id),
+        "name": user_name if user_name else "Participant",
+        "photo": user_photo,
+        "is_host": payload.is_host,
+        "is_screen_sharing": payload.is_screen_sharing or False,
+        "is_hand_raised": payload.is_hand_raised or False,
+        "last_seen": datetime.now(timezone.utc)
+    }
+
+    _live_call_participants[room_name][payload.uid] = participant_data
+
+    # Track lifetime room stats (total unique joined, left count)
+    if room_name not in _room_lifetime_stats:
+        _room_lifetime_stats[room_name] = {"total_joined": 0, "joined_users": set(), "left_count": 0}
+    
+    joined_users = _room_lifetime_stats[room_name].get("joined_users", set())
+    if str(user_id) not in joined_users:
+        joined_users.add(str(user_id))
+        _room_lifetime_stats[room_name]["joined_users"] = joined_users
+        _room_lifetime_stats[room_name]["total_joined"] = len(joined_users)
+
+    return {"status": "ok", "participant": participant_data}
+
+
+@router.get("/calls/{room_name}/participants")
+def get_call_participants(
+    room_name: str,
+    current_user: dict = Depends(get_current_user)
+):
+    room_dict = _live_call_participants.get(room_name, {})
+    now = datetime.now(timezone.utc)
+    active_list = []
+    stale_uids = []
+    for uid, p in room_dict.items():
+        if (now - p["last_seen"]).total_seconds() < 120:
+            active_list.append(p)
+        else:
+            stale_uids.append(uid)
+    for uid in stale_uids:
+        room_dict.pop(uid, None)
+
+    return active_list
+
+
+@router.delete("/calls/{room_name}/participants/{uid}")
+def leave_call_participant(
+    room_name: str,
+    uid: int,
+    current_user: dict = Depends(get_current_user)
+):
+    if room_name in _live_call_participants:
+        _live_call_participants[room_name].pop(uid, None)
+        active_count = len(_live_call_participants[room_name])
+        total_joined = _room_lifetime_stats.get(room_name, {}).get("total_joined", active_count)
+        if room_name in _room_lifetime_stats:
+            _room_lifetime_stats[room_name]["left_count"] = max(0, total_joined - active_count)
+    return {"status": "ok"}
+
 
 @router.post("/calls/{room_name}/intentions", response_model=MeetingIntentionOut)
 def send_meeting_intention(

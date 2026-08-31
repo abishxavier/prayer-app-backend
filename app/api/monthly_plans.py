@@ -22,17 +22,32 @@ from app.services.fcm import send_push_notification
 from datetime import datetime, timezone
 
 def _parse_plan_datetime(date_str: str, time_str: str) -> datetime:
-    """Parses date (YYYY-MM-DD) and time (e.g. 07:00 PM, 19:00, 7:30 AM) into a UTC datetime."""
+    """Parses date (YYYY-MM-DD) and time (e.g. 07:00 PM, 19:00, 7:30 AM, 6:30pm) into a UTC datetime."""
     try:
-        time_clean = (time_str or "").strip()
-        for fmt in ["%Y-%m-%d %I:%M %p", "%Y-%m-%d %I:%M%p", "%Y-%m-%d %H:%M", "%Y-%m-%d %H:%M:%S"]:
+        date_clean = (date_str or "").strip()
+        if "T" in date_clean:
+            date_clean = date_clean.split("T")[0].strip()
+        time_clean = (time_str or "").strip().upper()
+        # Normalise single digit hours e.g. 7:30 PM -> 07:30 PM
+        if ":" in time_clean:
+            parts = time_clean.split(":")
+            if len(parts[0]) == 1:
+                time_clean = "0" + time_clean
+
+        for fmt in [
+            "%Y-%m-%d %I:%M %p",
+            "%Y-%m-%d %I:%M%p",
+            "%Y-%m-%d %H:%M",
+            "%Y-%m-%d %H:%M:%S",
+            "%Y-%m-%d",
+        ]:
             try:
-                dt = datetime.strptime(f"{date_str} {time_clean}", fmt)
+                dt = datetime.strptime(f"{date_clean} {time_clean}".strip(), fmt)
                 return dt.replace(tzinfo=timezone.utc)
             except ValueError:
                 pass
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"Error parsing plan datetime: {e}")
     return datetime.now(timezone.utc)
 
 

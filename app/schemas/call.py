@@ -23,6 +23,13 @@ class ScheduledCallOut(BaseModel):
     host_name: Optional[str] = None
     scheduled_at: datetime
     created_at: datetime
+    active_participants_count: Optional[int] = 0
+    total_joined_count: Optional[int] = 0
+    left_count: Optional[int] = 0
+    can_join: Optional[bool] = False
+    is_live: Optional[bool] = False
+    is_expired: Optional[bool] = False
+    minutes_until: Optional[int] = None
 
     class Config:
         from_attributes = True
@@ -72,6 +79,28 @@ class MeetingIntentionOut(BaseModel):
     is_featured: bool = False
     is_prayed: bool = False
     created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class CallParticipantRegister(BaseModel):
+    uid: int
+    name: str
+    photo: Optional[str] = None
+    is_host: bool = False
+    is_screen_sharing: Optional[bool] = False
+    is_hand_raised: Optional[bool] = False
+
+class CallParticipantOut(BaseModel):
+    uid: int
+    user_id: str
+    name: str
+    photo: Optional[str] = None
+    is_host: bool = False
+    is_screen_sharing: bool = False
+    is_hand_raised: bool = False
+    last_seen: datetime
 
     class Config:
         from_attributes = True
