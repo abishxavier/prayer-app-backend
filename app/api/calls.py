@@ -507,4 +507,59 @@ def record_missed_call(
     return {"status": "ok"}
 
 
+@router.post("/calls/{room_name}/end")
+def end_meeting(
+    room_name: str,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    """Manually end a live meeting/scheduled call for all participants."""
+    # 1. Clear in-memory live participant pool
+    _live_call_participants.pop(room_name, None)
+    _live_meeting_intentions.pop(room_name, None)
+
+    # 2. Update ScheduledCall in database
+    call = db.query(ScheduledCall).filter(
+        (ScheduledCall.room_name == room_name) | (ScheduledCall.id == room_name)
+    ).first()
+    
+    if call:
+        call.is_rung = True
+        # Set scheduled_at to past so it registers as ended
+        call.scheduled_at = datetime.now(timezone.utc) - timedelta(hours=2)
+        db.commit()
+
+    # 3. Mark linked MonthlyPlan as completed if any
+    try:
+        if room_name.startswith("meeting_"):
+            plan_id = room_name.replace("meeting_", "")
+            from app.models.monthly_plan import MonthlyPlan
+            plan = db.query(MonthlyPlan).filter(MonthlyPlan.id == plan_id).first()
+            if plan:
+                plan.completed = True
+                db.commit()
+    except Exception as e:
+        print(f"Note on marking linked plan complete: {e}")
+
+    return {"status": "ok", "message": f"Meeting {room_name} ended successfully"}
+
+
+@router.delete("/calls/scheduled/{room_or_id}")
+def delete_scheduled_meeting(
+    room_or_id: str,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    """Delete a scheduled meeting from database and in-memory pool."""
+    _live_call_participants.pop(room_or_id, None)
+    _live_meeting_intentions.pop(room_or_id, None)
+
+    deleted_count = db.query(ScheduledCall).filter(
+        (ScheduledCall.room_name == room_or_id) | (ScheduledCall.id == room_or_id)
+    ).delete()
+    db.commit()
+
+    return {"status": "ok", "deleted": deleted_count}
+
+
 

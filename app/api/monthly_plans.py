@@ -1,38 +1,39 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
-from typing import List
+from typing import List, Union, Any
 import uuid
+import re
+from datetime import datetime, date, timezone, timedelta
 
 from app.db.session import get_db
 from app.core.security import get_current_user
 from app.models.monthly_plan import MonthlyPlan
+from app.models.call import ScheduledCall
+from app.models.user import User
 from app.schemas.monthly_plan import MonthlyPlanCreate, MonthlyPlanUpdate, MonthlyPlanOut
+from app.services.fcm import send_push_notification
 
 router = APIRouter()
 
-@router.get("", response_model=List[MonthlyPlanOut])
-def get_monthly_plans(db: Session = Depends(get_db)):
-    """Fetch all community monthly plans, ordered by date ascending."""
-    plans = db.query(MonthlyPlan).order_by(MonthlyPlan.date.asc()).all()
-    return plans
-
-import re
-from datetime import datetime, timezone, timedelta
-from app.models.user import User
-from app.models.call import ScheduledCall
-from app.services.fcm import send_push_notification
-
-def _parse_plan_datetime(date_str: str, time_str: str) -> datetime | None:
-    """Parses date (YYYY-MM-DD or ISO) and time (e.g. 06:30 AM, 18:30) in IST (+05:30) and converts to UTC.
-    Returns None if invalid. NEVER returns current time.
+def _parse_plan_datetime(raw_date: Union[datetime, date, str, None], raw_time: Union[str, None]) -> datetime | None:
+    """Parses date (datetime, date, YYYY-MM-DD, or ISO) and time (e.g. 06:30 PM, 18:30) in IST (+05:30) and converts to UTC.
+    Returns None if invalid.
     """
     try:
-        date_match = re.search(r'(\d{4}-\d{2}-\d{2})', date_str or '')
-        if not date_match:
-            return None
-        clean_date = date_match.group(1)
+        clean_date = None
+        if isinstance(raw_date, datetime):
+            clean_date = raw_date.strftime("%Y-%m-%d")
+        elif isinstance(raw_date, date):
+            clean_date = raw_date.strftime("%Y-%m-%d")
+        elif isinstance(raw_date, str):
+            date_match = re.search(r'(\d{4}-\d{2}-\d{2})', raw_date)
+            if date_match:
+                clean_date = date_match.group(1)
 
-        clean_time = (time_str or '').strip().upper()
+        if not clean_date:
+            return None
+
+        clean_time = str(raw_time or '').strip().upper()
         time_match = re.search(r'(\d{1,2}):(\d{2})\s*(AM|PM)?', clean_time)
         if not time_match:
             return None
@@ -56,16 +57,94 @@ def _parse_plan_datetime(date_str: str, time_str: str) -> datetime | None:
         return None
 
 
+def _sync_single_plan_to_call(db: Session, plan: MonthlyPlan, user_id: str | None = None):
+    """Ensures a MonthlyPlan has a corresponding ScheduledCall in the database."""
+    try:
+        scheduled_dt = _parse_plan_datetime(plan.date, plan.time)
+        if not scheduled_dt:
+            return
+
+        room_name = f"meeting_{plan.id}"
+        existing_call = db.query(ScheduledCall).filter(ScheduledCall.room_name == room_name).first()
+
+        host_id = plan.created_by or user_id
+        if not host_id:
+            first_user = db.query(User).first()
+            host_id = first_user.id if first_user else "admin"
+
+        if existing_call:
+            existing_call.topic = plan.title
+            existing_call.description = plan.notes or f"Calendar Plan: {plan.category or 'Prayer Meeting'}"
+            existing_call.call_type = plan.category or "Prayer Meeting"
+            existing_call.scheduled_at = scheduled_dt
+            # If future meeting, reset is_rung so it will ring at the scheduled time
+            now_utc = datetime.now(timezone.utc)
+            if scheduled_dt > now_utc:
+                existing_call.is_rung = False
+            db.commit()
+        else:
+            call = ScheduledCall(
+                topic=plan.title,
+                description=plan.notes or f"Calendar Plan: {plan.category or 'Prayer Meeting'}",
+                call_type=plan.category or "Prayer Meeting",
+                room_name=room_name,
+                host_id=host_id,
+                chat_id=None,
+                scheduled_at=scheduled_dt,
+                is_rung=False
+            )
+            db.add(call)
+            db.commit()
+    except Exception as e:
+        print(f"Error in _sync_single_plan_to_call: {e}")
+
+
+@router.get("", response_model=List[MonthlyPlanOut])
+def get_monthly_plans(db: Session = Depends(get_db)):
+    """Fetch all community monthly plans, ordered by date ascending and ensure scheduled calls exist."""
+    plans = db.query(MonthlyPlan).order_by(MonthlyPlan.date.asc()).all()
+    
+    # Auto-backfill scheduled calls for any plans that don't have them yet
+    try:
+        for plan in plans:
+            room_name = f"meeting_{plan.id}"
+            has_call = db.query(ScheduledCall).filter(ScheduledCall.room_name == room_name).first()
+            if not has_call:
+                _sync_single_plan_to_call(db, plan)
+    except Exception as e:
+        print(f"Note on backfilling calls for monthly plans: {e}")
+
+    return plans
+
+
 @router.post("", response_model=MonthlyPlanOut)
 def create_monthly_plan(
     payload: MonthlyPlanCreate,
     db: Session = Depends(get_db),
     current_user: dict = Depends(get_current_user)
 ):
-    """Create a new monthly plan and conditionally schedule a future video meeting."""
+    """Create a new monthly plan and schedule the corresponding video meeting in Scheduled Calls."""
     user_id = current_user["sub"]
     user = db.query(User).filter(User.id == user_id).first()
     valid_creator_id = user.id if user else None
+
+    # Parse date cleanly
+    clean_date_obj = None
+    if isinstance(payload.date, datetime):
+        clean_date_obj = payload.date
+    elif isinstance(payload.date, date):
+        clean_date_obj = datetime.combine(payload.date, datetime.min.time())
+    elif isinstance(payload.date, str):
+        try:
+            d_match = re.search(r'(\d{4}-\d{2}-\d{2})', payload.date)
+            if d_match:
+                clean_date_obj = datetime.strptime(d_match.group(1), "%Y-%m-%d")
+            else:
+                clean_date_obj = datetime.now()
+        except Exception:
+            clean_date_obj = datetime.now()
+    else:
+        clean_date_obj = datetime.now()
 
     plan_id = f"plan_{uuid.uuid4().hex[:12]}"
     plan = MonthlyPlan(
@@ -75,7 +154,7 @@ def create_monthly_plan(
         category=payload.category,
         tamil_category=payload.tamil_category or payload.category,
         time=payload.time,
-        date=payload.date,
+        date=clean_date_obj,
         notes=payload.notes,
         tamil_notes=payload.tamil_notes,
         is_recurring=payload.is_recurring,
@@ -86,15 +165,12 @@ def create_monthly_plan(
     db.commit()
     db.refresh(plan)
 
-    # Automatically create the corresponding Scheduled Video Call meeting ONLY IF IN FUTURE
+    # Automatically create the corresponding Scheduled Video Call meeting
     try:
-        scheduled_dt = _parse_plan_datetime(payload.date, payload.time)
-        now_utc = datetime.now(timezone.utc)
+        scheduled_dt = _parse_plan_datetime(clean_date_obj, payload.time)
+        room_name = f"meeting_{plan_id}"
 
-        # Only create a scheduled call if valid and NOT in the past
-        if scheduled_dt and (scheduled_dt - now_utc).total_seconds() >= -600:
-            room_name = f"meeting_{plan_id}"
-
+        if scheduled_dt:
             call = ScheduledCall(
                 topic=payload.title,
                 description=payload.notes or f"Calendar Plan: {payload.category or 'Prayer Meeting'}",
@@ -102,13 +178,14 @@ def create_monthly_plan(
                 room_name=room_name,
                 host_id=valid_creator_id or user_id,
                 chat_id=None,
-                scheduled_at=scheduled_dt
+                scheduled_at=scheduled_dt,
+                is_rung=False
             )
             db.add(call)
             db.commit()
             db.refresh(call)
 
-            # Dispatch Informational FCM Push Notification (NOT live video call ring)
+            # Dispatch Informational FCM Push Notification (Calendar event scheduled, NOT live ringing)
             target_users = db.query(User).filter(
                 User.id != user_id,
                 User.device_token.isnot(None),
@@ -117,7 +194,7 @@ def create_monthly_plan(
 
             host_name = user.name if user and user.name else "Community Leader"
             notif_title = f"📅 New Meeting Scheduled: {payload.title}"
-            notif_body = f"{host_name} scheduled a {payload.category or 'Prayer Meeting'} for {payload.date} at {payload.time}."
+            notif_body = f"{host_name} scheduled {payload.category or 'Prayer Meeting'} for {clean_date_obj.strftime('%b %d, %Y')} at {payload.time}."
 
             for u in target_users:
                 if u.device_token:
@@ -131,6 +208,7 @@ def create_monthly_plan(
                             "room_name": str(room_name),
                             "topic": str(payload.title),
                             "host_name": str(host_name),
+                            "call_type": str(payload.category or "Prayer Meeting"),
                             "scheduled_at": scheduled_dt.isoformat(),
                         }
                     )
@@ -153,44 +231,21 @@ def update_monthly_plan(
         raise HTTPException(status_code=404, detail="Plan not found")
 
     update_data = payload.model_dump(exclude_unset=True)
+    if "date" in update_data and update_data["date"] is not None:
+        raw_d = update_data["date"]
+        if isinstance(raw_d, str):
+            d_match = re.search(r'(\d{4}-\d{2}-\d{2})', raw_d)
+            if d_match:
+                update_data["date"] = datetime.strptime(d_match.group(1), "%Y-%m-%d")
+
     for key, value in update_data.items():
         setattr(plan, key, value)
 
     db.commit()
     db.refresh(plan)
 
-    # Sync linked ScheduledCall if any
-    try:
-        room_name = f"meeting_{plan_id}"
-        linked_call = db.query(ScheduledCall).filter(ScheduledCall.room_name == room_name).first()
-        d = payload.date if payload.date is not None else plan.date
-        t = payload.time if payload.time is not None else plan.time
-        new_dt = _parse_plan_datetime(d, t)
-
-        if linked_call:
-            if payload.title is not None:
-                linked_call.topic = payload.title
-            if payload.notes is not None:
-                linked_call.description = payload.notes
-            if payload.category is not None:
-                linked_call.call_type = payload.category
-            if new_dt is not None:
-                linked_call.scheduled_at = new_dt
-            db.commit()
-        elif new_dt and (new_dt - datetime.now(timezone.utc)).total_seconds() >= -600:
-            call = ScheduledCall(
-                topic=plan.title,
-                description=plan.notes or f"Calendar Plan: {plan.category or 'Prayer Meeting'}",
-                call_type=plan.category or "Prayer Meeting",
-                room_name=room_name,
-                host_id=plan.created_by or user_id,
-                chat_id=None,
-                scheduled_at=new_dt
-            )
-            db.add(call)
-            db.commit()
-    except Exception as e:
-        print(f"Note on updating linked call: {e}")
+    # Sync linked ScheduledCall
+    _sync_single_plan_to_call(db, plan, current_user["sub"])
 
     return plan
 
