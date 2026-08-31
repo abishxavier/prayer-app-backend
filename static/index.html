@@ -70,6 +70,15 @@
   <script src="AgoraRTC_N.js" type="application/javascript"></script>
   <script src="iris-web-rtc.js" type="application/javascript"></script>
 
+  <script>
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.getRegistrations().then(function(registrations) {
+        for (let registration of registrations) {
+          registration.update();
+        }
+      });
+    }
+  </script>
   <script src="flutter_bootstrap.js" async></script>
 </body>
 </html>

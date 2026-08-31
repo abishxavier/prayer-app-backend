@@ -125,6 +125,15 @@ def health_check():
 # Mount Flutter Web App (PWA) static assets so root URL serves the Web App
 from fastapi.staticfiles import StaticFiles
 
+class NoCacheStaticFiles(StaticFiles):
+    async def get_response(self, path: str, scope):
+        response = await super().get_response(path, scope)
+        if path.endswith((".html", "flutter_bootstrap.js", "flutter_service_worker.js", "main.dart.js", ".json")):
+            response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate, max-age=0"
+            response.headers["Pragma"] = "no-cache"
+            response.headers["Expires"] = "0"
+        return response
+
 static_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "static")
 if os.path.exists(static_dir):
-    app.mount("/", StaticFiles(directory=static_dir, html=True), name="static")
+    app.mount("/", NoCacheStaticFiles(directory=static_dir, html=True), name="static")
