@@ -294,6 +294,52 @@ def register_call_participant(
     return {"status": "ok", "participant": participant_data}
 
 
+@router.get("/calls/{room_name}/host-status")
+def get_call_host_status(
+    room_name: str,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    user_id = current_user["sub"]
+
+    # 1. Lookup ScheduledCall if exists
+    scheduled_call = db.query(ScheduledCall).filter(ScheduledCall.room_name == room_name).first()
+    host_user_id = scheduled_call.host_id if scheduled_call else None
+    host_user = db.query(User).filter(User.id == host_user_id).first() if host_user_id else None
+    host_name = host_user.name if host_user and host_user.name else "Prayer Leader"
+
+    # 2. Check if current user is the host
+    is_current_user_host = False
+    if host_user_id and str(user_id) == str(host_user_id):
+        is_current_user_host = True
+
+    # 3. Check live active participants in the call room
+    room_dict = _live_call_participants.get(room_name, {})
+    now = datetime.now(timezone.utc)
+    is_host_online = False
+
+    for uid, p in list(room_dict.items()):
+        if (now - p["last_seen"]).total_seconds() < 120:
+            if p.get("is_host") is True or (host_user_id and str(p.get("user_id")) == str(host_user_id)):
+                is_host_online = True
+                break
+        else:
+            room_dict.pop(uid, None)
+
+    # If current user is host, they can always join (and will become the active host)
+    can_join = is_current_user_host or is_host_online
+
+    return {
+        "room_name": room_name,
+        "is_host_online": is_host_online,
+        "is_current_user_host": is_current_user_host,
+        "can_join": can_join,
+        "host_name": host_name,
+        "topic": scheduled_call.topic if scheduled_call else "Prayer Meeting",
+        "call_type": scheduled_call.call_type if scheduled_call else "Prayer Meeting",
+    }
+
+
 @router.get("/calls/{room_name}/participants")
 def get_call_participants(
     room_name: str,
