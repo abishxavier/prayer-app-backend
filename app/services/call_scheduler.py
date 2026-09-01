@@ -64,8 +64,8 @@ def check_and_ring_scheduled_calls():
                         if u.device_token:
                             tokens_to_notify.append(u.device_token)
 
-                notif_title = f"📞 Prayer Meeting Starting Now: {topic}"
-                notif_body = f"{host_name} scheduled {call_type} is starting now! Tap to Join."
+                notif_title = f"📞 {topic} - Starting Now!"
+                notif_body = f"{host_name} scheduled this meeting. Tap to Join."
                 fcm_data = {
                     "type": "video_call",
                     "notification_type": "video_call",

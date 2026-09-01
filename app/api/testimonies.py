@@ -4,7 +4,7 @@ from typing import List
 
 from app.db.session import get_db
 from app.core.security import get_current_user
-from app.models.testimony import Testimony
+from app.models.testimony import Testimony, TestimonyLike
 from app.models.user import User
 from app.schemas.testimony import TestimonyCreate, TestimonyUpdate, TestimonyOut
 
@@ -90,20 +90,51 @@ def update_testimony(
     return testimony
 
 
-@router.post("/testimonies/{testimony_id}/like", response_model=TestimonyOut)
+@router.post("/testimonies/{testimony_id}/like")
 def like_testimony(
     testimony_id: str,
     db: Session = Depends(get_db),
     current_user: dict = Depends(get_current_user)
 ):
+    user_id = current_user["sub"]
     testimony = db.query(Testimony).filter(Testimony.id == testimony_id).first()
     if not testimony:
         raise HTTPException(status_code=404, detail="Testimony not found")
 
-    testimony.likes = (testimony.likes or 0) + 1
+    # Check if user already liked this testimony
+    existing_like = db.query(TestimonyLike).filter(
+        TestimonyLike.testimony_id == testimony_id,
+        TestimonyLike.user_id == user_id
+    ).first()
+
+    if existing_like:
+        # Unlike: remove the like record and decrement count
+        db.delete(existing_like)
+        testimony.likes = max((testimony.likes or 1) - 1, 0)
+        is_liked = False
+    else:
+        # Like: add a like record and increment count
+        new_like = TestimonyLike(testimony_id=testimony_id, user_id=user_id)
+        db.add(new_like)
+        testimony.likes = (testimony.likes or 0) + 1
+        is_liked = True
+
     db.commit()
     db.refresh(testimony)
-    return testimony
+
+    return {
+        "id": testimony.id,
+        "user_id": testimony.user_id,
+        "user_name": testimony.user_name,
+        "user_image": testimony.user_image,
+        "title": testimony.title,
+        "content": testimony.content,
+        "image_url": testimony.image_url,
+        "likes": testimony.likes,
+        "shares": testimony.shares,
+        "created_at": testimony.created_at.isoformat() if testimony.created_at else None,
+        "is_liked_by_me": is_liked,
+    }
 
 
 @router.post("/testimonies/{testimony_id}/share", response_model=TestimonyOut)
