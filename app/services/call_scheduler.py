@@ -33,9 +33,9 @@ def check_and_ring_scheduled_calls():
             else:
                 call_time = call_time.astimezone(timezone.utc)
 
-            # Check if scheduled time has arrived (within a 30-minute validity window)
+            # Check if scheduled time has arrived (strictly within a 2-minute window of the scheduled start)
             time_diff = now - call_time
-            if timedelta(seconds=0) <= time_diff <= timedelta(minutes=30):
+            if timedelta(seconds=0) <= time_diff <= timedelta(minutes=2):
                 host = db.query(User).filter(User.id == call.host_id).first()
                 host_name = host.name if host and host.name else "Prayer Leader"
                 topic = call.topic or "Prayer Meeting"
@@ -87,8 +87,8 @@ def check_and_ring_scheduled_calls():
                 db.commit()
                 logger.info(f"✅ [Auto-Ringer] Successfully rang {sent_count}/{len(unique_tokens)} participants for '{topic}'.")
 
-            elif time_diff > timedelta(minutes=30):
-                # Call was scheduled far in the past without being rung, mark as rung to clear queue
+            elif time_diff > timedelta(minutes=2):
+                # Call was scheduled in the past without being rung, mark as rung to clear queue without ringing
                 call.is_rung = True
                 db.commit()
 
