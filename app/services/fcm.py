@@ -107,9 +107,10 @@ def send_push_notification(token: str, title: str, body: str, data: dict = None,
 
         android_config = messaging.AndroidConfig(
             priority='high',
-            collapse_key=f"call_{room_name}" if is_call and room_name else None,
             data=fcm_data,
-            notification=None if is_call else messaging.AndroidNotification(
+            notification=messaging.AndroidNotification(
+                title=title,
+                body=body,
                 sound=call_sound,
                 click_action='FLUTTER_NOTIFICATION_CLICK',
                 channel_id=channel_id,
@@ -120,12 +121,12 @@ def send_push_notification(token: str, title: str, body: str, data: dict = None,
         )
 
         apns_config = messaging.APNSConfig(
-            headers={"apns-collapse-id": f"call_{room_name}", "apns-priority": "10"} if is_call and room_name else None,
+            headers={"apns-priority": "10"} if is_call and room_name else None,
             payload=messaging.APNSPayload(
                 aps=messaging.Aps(
                     badge=1,
                     sound=apns_sound,
-                    content_available=True if is_call else False,
+                    content_available=True,
                     mutable_content=True if image_url else False,
                 )
             ),
@@ -133,7 +134,7 @@ def send_push_notification(token: str, title: str, body: str, data: dict = None,
         )
 
         message = messaging.Message(
-            notification=None if is_call else messaging.Notification(
+            notification=messaging.Notification(
                 title=title,
                 body=body,
                 image=image_url,
