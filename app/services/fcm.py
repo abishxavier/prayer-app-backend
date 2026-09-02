@@ -98,34 +98,17 @@ def send_push_notification(token: str, title: str, body: str, data: dict = None,
 
         # Channel selection: Calls use high priority call channel with ringtone
         is_call = (notif_type in ["video_call", "incoming_call", "call"]) or fcm_data.get("is_ringing") == "true"
-        channel_id = 'video_call_channel_v3' if is_call else 'high_importance_channel'
+        channel_id = 'video_call_channel_v4' if is_call else 'high_importance_channel'
         room_name = fcm_data.get("room_name", "")
         # Use room_name as tag for video calls to collapse duplicate notifications on the same call
         tag = f"video_call_{room_name}" if is_call and room_name else (fcm_data.get("chat_id") or None)
-        call_sound = 'ringtone' if is_call else 'default'
-        apns_sound = 'ringtone.wav' if is_call else 'default'
-
-        android_config = messaging.AndroidConfig(
-            priority='high',
-            data=fcm_data,
-            notification=messaging.AndroidNotification(
-                title=title,
-                body=body,
-                sound=call_sound,
-                click_action='FLUTTER_NOTIFICATION_CLICK',
-                channel_id=channel_id,
-                notification_count=1,
-                image=image_url,
-                tag=tag,
-            )
-        )
 
         apns_config = messaging.APNSConfig(
             headers={"apns-priority": "10"} if is_call and room_name else None,
             payload=messaging.APNSPayload(
                 aps=messaging.Aps(
                     badge=1,
-                    sound=apns_sound,
+                    sound='default',
                     content_available=True,
                     mutable_content=True if image_url else False,
                 )
@@ -133,17 +116,48 @@ def send_push_notification(token: str, title: str, body: str, data: dict = None,
             fcm_options=messaging.APNSFCMOptions(image=image_url) if image_url else None,
         )
 
-        message = messaging.Message(
-            notification=messaging.Notification(
-                title=title,
-                body=body,
-                image=image_url,
-            ),
-            data=fcm_data,
-            token=token,
-            android=android_config,
-            apns=apns_config,
-        )
+        if is_call:
+            # VIDEO CALL: Send as high-priority DATA-ONLY message.
+            # This ensures Android Google Play Services wakes up the app's background handler
+            # (firebaseMessagingBackgroundHandler) so it triggers fullScreenIntent,
+            # loops the phone caller ringtone (FLAG_INSISTENT), and displays the heads-up banner on the home screen.
+            android_config = messaging.AndroidConfig(
+                priority='high',
+                data=fcm_data,
+            )
+            message = messaging.Message(
+                data=fcm_data,
+                token=token,
+                android=android_config,
+                apns=apns_config,
+            )
+        else:
+            # STANDARD NOTIFICATION: Normal system notification drawer display
+            android_config = messaging.AndroidConfig(
+                priority='high',
+                data=fcm_data,
+                notification=messaging.AndroidNotification(
+                    title=title,
+                    body=body,
+                    sound='default',
+                    click_action='FLUTTER_NOTIFICATION_CLICK',
+                    channel_id='high_importance_channel',
+                    notification_count=1,
+                    image=image_url,
+                    tag=tag,
+                )
+            )
+            message = messaging.Message(
+                notification=messaging.Notification(
+                    title=title,
+                    body=body,
+                    image=image_url,
+                ),
+                data=fcm_data,
+                token=token,
+                android=android_config,
+                apns=apns_config,
+            )
         response = messaging.send(message)
         logger.info(f"Push notification sent [{notif_type}]: {response}")
         return True
