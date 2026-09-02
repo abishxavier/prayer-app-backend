@@ -98,7 +98,7 @@ def send_push_notification(token: str, title: str, body: str, data: dict = None,
 
         # Channel selection: Calls use high priority call channel with ringtone
         is_call = (notif_type in ["video_call", "incoming_call", "call"]) or fcm_data.get("is_ringing") == "true"
-        channel_id = 'video_call_channel_v2' if is_call else 'high_importance_channel'
+        channel_id = 'video_call_channel_v3' if is_call else 'high_importance_channel'
         room_name = fcm_data.get("room_name", "")
         # Use room_name as tag for video calls to collapse duplicate notifications on the same call
         tag = f"video_call_{room_name}" if is_call and room_name else (fcm_data.get("chat_id") or None)
