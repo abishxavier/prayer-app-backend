@@ -98,6 +98,7 @@ def schedule_call(payload: ScheduledCallCreate, db: Session = Depends(get_db), c
 _live_meeting_intentions: dict[str, list[dict]] = {}
 _live_call_participants: dict[str, dict[int, dict]] = {}
 _room_lifetime_stats: dict[str, dict] = {}
+_ended_meeting_rooms: set[str] = set()
 
 
 @router.get("/calls/scheduled", response_model=List[ScheduledCallOut])
@@ -311,13 +312,19 @@ def get_call_host_status(
             room_dict.pop(uid, None)
 
     # If current user is host, they can always join (and will become the active host)
-    can_join = is_current_user_host or is_host_online
+    is_ended = room_name in _ended_meeting_rooms
+    if scheduled_call and scheduled_call.is_rung:
+        if scheduled_call.scheduled_at and (now - scheduled_call.scheduled_at).total_seconds() > 3600:
+            is_ended = True
+
+    can_join = (is_current_user_host or is_host_online) and not is_ended
 
     return {
         "room_name": room_name,
         "is_host_online": is_host_online,
         "is_current_user_host": is_current_user_host,
         "can_join": can_join,
+        "is_ended": is_ended,
         "host_name": host_name,
         "topic": scheduled_call.topic if scheduled_call else "Prayer Meeting",
         "call_type": scheduled_call.call_type if scheduled_call else "Prayer Meeting",
@@ -459,6 +466,7 @@ def ring_meeting_call(
     fcm_data = {
         "type": "video_call",
         "notification_type": "video_call",
+        "is_ringing": "true",
         "room_name": room_name,
         "topic": topic,
         "host_name": user.name or "Host",
@@ -527,11 +535,14 @@ def end_meeting(
     current_user: dict = Depends(get_current_user)
 ):
     """Manually end a live meeting/scheduled call for all participants."""
-    # 1. Clear in-memory live participant pool
+    # 1. Track in-memory as ended
+    _ended_meeting_rooms.add(room_name)
+
+    # 2. Clear in-memory live participant pool
     _live_call_participants.pop(room_name, None)
     _live_meeting_intentions.pop(room_name, None)
 
-    # 2. Update ScheduledCall in database
+    # 3. Update ScheduledCall in database
     call = db.query(ScheduledCall).filter(
         (ScheduledCall.room_name == room_name) | (ScheduledCall.id == room_name)
     ).first()
@@ -542,7 +553,7 @@ def end_meeting(
         call.scheduled_at = datetime.now(timezone.utc) - timedelta(hours=2)
         db.commit()
 
-    # 3. Mark linked MonthlyPlan as completed if any
+    # 4. Mark linked MonthlyPlan as completed if any
     try:
         if room_name.startswith("meeting_"):
             plan_id = room_name.replace("meeting_", "")
@@ -553,6 +564,26 @@ def end_meeting(
                 db.commit()
     except Exception as e:
         print(f"Note on marking linked plan complete: {e}")
+
+    # 5. Broadcast FCM meeting_ended to dismiss ringing dialogs on all user devices
+    try:
+        user_id = current_user["sub"]
+        all_users = db.query(User).filter(User.id != user_id, User.device_token.isnot(None), User.device_token != "").all()
+        end_fcm_data = {
+            "type": "meeting_ended",
+            "notification_type": "meeting_ended",
+            "room_name": str(room_name),
+        }
+        for u in all_users:
+            if u.device_token:
+                send_push_notification(
+                    token=u.device_token,
+                    title="Meeting Ended",
+                    body="The host has ended this prayer meeting.",
+                    data=end_fcm_data,
+                )
+    except Exception as e:
+        print(f"Error broadcasting meeting_ended push: {e}")
 
     return {"status": "ok", "message": f"Meeting {room_name} ended successfully"}
 
