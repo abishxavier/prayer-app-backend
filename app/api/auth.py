@@ -415,13 +415,9 @@ def update_presence(current_user: dict = Depends(get_current_user), db: Session 
 @router.post("/auth/delete-account")
 def delete_account(current_user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
     """Deletes the current user and cascades all related data safely."""
-    from app.models.blocked_user import BlockedUser
-    from app.models.chat_member import ChatMember, MemberRole
-    from app.models.message import Message
     from app.models.prayer_request import PrayerRequest
     from app.models.prayer_response import PrayerResponse
     from app.models.call import ScheduledCall, CallLog
-    from app.models.chat import Chat, ChatType
     from app.models.testimony import Testimony
     from app.models.gallery import GalleryItem
     from app.models.monthly_plan import MonthlyPlan
@@ -443,45 +439,18 @@ def delete_account(current_user: dict = Depends(get_current_user), db: Session =
         # 4. Handle monthly plans created by user
         db.query(MonthlyPlan).filter(MonthlyPlan.created_by == user_id).update({"created_by": None}, synchronize_session=False)
 
-        # 5. Delete blocked user relationships
-        db.query(BlockedUser).filter((BlockedUser.user_id == user_id) | (BlockedUser.blocked_user_id == user_id)).delete(synchronize_session=False)
-
-        # 6. Delete prayer responses by user AND prayer responses to user's prayer requests
+        # 5. Delete prayer responses by user AND prayer responses to user's prayer requests
         user_prayer_req_ids = [r.id for r in db.query(PrayerRequest.id).filter(PrayerRequest.user_id == user_id).all()]
         if user_prayer_req_ids:
             db.query(PrayerResponse).filter(PrayerResponse.request_id.in_(user_prayer_req_ids)).delete(synchronize_session=False)
         db.query(PrayerResponse).filter(PrayerResponse.user_id == user_id).delete(synchronize_session=False)
         db.query(PrayerRequest).filter(PrayerRequest.user_id == user_id).delete(synchronize_session=False)
 
-        # 7. Delete call logs and scheduled calls
+        # 6. Delete call logs and scheduled calls
         db.query(CallLog).filter((CallLog.caller_id == user_id) | (CallLog.receiver_id == user_id)).delete(synchronize_session=False)
         db.query(ScheduledCall).filter(ScheduledCall.host_id == user_id).delete(synchronize_session=False)
 
-        # 8. Delete sent messages
-        db.query(Message).filter(Message.sender_id == user_id).delete(synchronize_session=False)
-
-        # 9. Delete chat memberships
-        db.query(ChatMember).filter(ChatMember.user_id == user_id).delete(synchronize_session=False)
-
-        # 10. Handle direct chats created by user
-        direct_chats = db.query(Chat).filter(Chat.created_by == user_id, (Chat.type == ChatType.direct) | (Chat.type == "direct")).all()
-        for dc in direct_chats:
-            db.query(Message).filter(Message.chat_id == dc.id).delete(synchronize_session=False)
-            db.query(ChatMember).filter(ChatMember.chat_id == dc.id).delete(synchronize_session=False)
-            db.delete(dc)
-
-        # 11. Handle group chats created by user: reassign created_by or delete if empty
-        group_chats = db.query(Chat).filter(Chat.created_by == user_id).all()
-        for gc in group_chats:
-            remaining_member = db.query(ChatMember).filter(ChatMember.chat_id == gc.id).first()
-            if remaining_member:
-                gc.created_by = remaining_member.user_id
-                remaining_member.role = MemberRole.admin
-            else:
-                db.query(Message).filter(Message.chat_id == gc.id).delete(synchronize_session=False)
-                db.delete(gc)
-
-        # 12. Delete user record
+        # 7. Delete user record
         db.query(User).filter(User.id == user_id).delete(synchronize_session=False)
 
         db.commit()

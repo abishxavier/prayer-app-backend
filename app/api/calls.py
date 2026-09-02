@@ -12,7 +12,6 @@ from app.schemas.call import ScheduledCallCreate, ScheduledCallOut
 router = APIRouter()
 
 
-from app.models.chat_member import ChatMember
 from app.services.fcm import send_push_notification
 
 @router.post("/calls/scheduled", response_model=ScheduledCallOut)
@@ -41,7 +40,6 @@ def schedule_call(payload: ScheduledCallCreate, db: Session = Depends(get_db), c
         call_type=payload.call_type,
         room_name=payload.room_name,
         host_id=user_id,
-        chat_id=payload.chat_id,
         scheduled_at=sched_utc
     )
     db.add(call)
@@ -51,26 +49,15 @@ def schedule_call(payload: ScheduledCallCreate, db: Session = Depends(get_db), c
     # ── Dispatch FCM Push Notification for the Video Call ──
     try:
         tokens_to_notify = []
-        if payload.chat_id:
-            members = db.query(ChatMember).filter(
-                ChatMember.chat_id == payload.chat_id,
-                ChatMember.user_id != user_id
-            ).all()
-            member_ids = [m.user_id for m in members]
-            target_users = db.query(User).filter(User.id.in_(member_ids)).all()
-            for u in target_users:
-                if u.device_token:
-                    tokens_to_notify.append(u.device_token)
-        else:
-            # Community-wide scheduled prayer meeting
-            target_users = db.query(User).filter(
-                User.id != user_id,
-                User.device_token.isnot(None),
-                User.device_token != ""
-            ).all()
-            for u in target_users:
-                if u.device_token:
-                    tokens_to_notify.append(u.device_token)
+        # Community-wide scheduled prayer meeting — notify all users
+        target_users = db.query(User).filter(
+            User.id != user_id,
+            User.device_token.isnot(None),
+            User.device_token != ""
+        ).all()
+        for u in target_users:
+            if u.device_token:
+                tokens_to_notify.append(u.device_token)
 
         notif_title = f"📅 Prayer Meeting Scheduled: {call.topic}"
         notif_body = f"{user.name} scheduled a {call.call_type or 'Prayer Meeting'}. Tap to view details!"
@@ -82,7 +69,6 @@ def schedule_call(payload: ScheduledCallCreate, db: Session = Depends(get_db), c
             "host_name": str(user.name or "Host"),
             "call_type": str(call.call_type or "Prayer Meeting"),
             "scheduled_at": call.scheduled_at.isoformat() if call.scheduled_at else "",
-            "chat_id": str(call.chat_id or ""),
         }
 
         for tok in set(tokens_to_notify):
@@ -101,7 +87,6 @@ def schedule_call(payload: ScheduledCallCreate, db: Session = Depends(get_db), c
         description=call.description,
         call_type=call.call_type,
         room_name=call.room_name,
-        chat_id=call.chat_id,
         host_id=call.host_id,
         host_name=user.name,
         scheduled_at=call.scheduled_at,
@@ -156,7 +141,6 @@ def get_scheduled_calls(db: Session = Depends(get_db), current_user: dict = Depe
             description=call.description,
             call_type=call.call_type,
             room_name=call.room_name,
-            chat_id=call.chat_id,
             host_id=call.host_id,
             host_name=host.name if host else "Unknown",
             scheduled_at=call.scheduled_at,
@@ -458,31 +442,20 @@ def ring_meeting_call(
     call = db.query(ScheduledCall).filter(ScheduledCall.room_name == room_name).first()
     topic = call.topic if call else "Prayer Meeting"
     call_type = call.call_type if call else "Video Call"
-    chat_id = call.chat_id if call else None
 
     tokens_to_notify = []
-    if chat_id:
-        members = db.query(ChatMember).filter(
-            ChatMember.chat_id == chat_id,
-            ChatMember.user_id != user_id
-        ).all()
-        member_ids = [m.user_id for m in members]
-        target_users = db.query(User).filter(User.id.in_(member_ids)).all()
-        for u in target_users:
-            if u.device_token:
-                tokens_to_notify.append(u.device_token)
-    else:
-        target_users = db.query(User).filter(
-            User.id != user_id,
-            User.device_token.isnot(None),
-            User.device_token != ""
-        ).all()
-        for u in target_users:
-            if u.device_token:
-                tokens_to_notify.append(u.device_token)
+    # Community-wide ring — notify all users except the host
+    target_users = db.query(User).filter(
+        User.id != user_id,
+        User.device_token.isnot(None),
+        User.device_token != ""
+    ).all()
+    for u in target_users:
+        if u.device_token:
+            tokens_to_notify.append(u.device_token)
 
-    notif_title = f"📞 Live Prayer Meeting: {topic}"
-    notif_body = f"{user.name} is calling you to join the {call_type} now!"
+    notif_title = f"{topic}"
+    notif_body = f"Host: {user.name or 'Host'} • Tap to Join"
     fcm_data = {
         "type": "video_call",
         "notification_type": "video_call",
@@ -490,7 +463,6 @@ def ring_meeting_call(
         "topic": topic,
         "host_name": user.name or "Host",
         "call_type": call_type,
-        "chat_id": chat_id or "",
     }
 
     sent_count = 0
@@ -509,7 +481,6 @@ def record_missed_call(
     room_name: str,
     target_user_id: str = None,
     topic: str = "Video Call",
-    chat_id: str = None,
     db: Session = Depends(get_db),
     current_user: dict = Depends(get_current_user)
 ):
@@ -523,10 +494,7 @@ def record_missed_call(
             caller_id=caller_id,
             receiver_id=target_user_id,
             status="missed",
-            duration=0,
-            room_name=room_name,
             call_type="video",
-            chat_id=chat_id,
         )
         db.add(log)
         db.commit()
@@ -545,7 +513,6 @@ def record_missed_call(
                     "caller_name": caller_name,
                     "caller_image": caller.profile_image or "",
                     "room_name": room_name,
-                    "chat_id": str(chat_id or ""),
                     "topic": topic,
                 }
             )

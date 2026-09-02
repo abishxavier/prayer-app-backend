@@ -92,9 +92,13 @@ def send_push_notification(token: str, title: str, body: str, data: dict = None,
             image_url = image
             fcm_data["image"] = image_url
 
+        # Always embed title and body into fcm_data for client background handler
+        fcm_data["title"] = str(title)
+        fcm_data["body"] = str(body)
+
         # Channel selection: Calls use high priority call channel with ringtone
-        is_call = (notif_type in ["video_call", "incoming_call", "call"])
-        channel_id = 'video_call_channel' if is_call else 'high_importance_channel'
+        is_call = (notif_type in ["video_call", "incoming_call", "call"]) or fcm_data.get("is_ringing") == "true"
+        channel_id = 'video_call_channel_v2' if is_call else 'high_importance_channel'
         room_name = fcm_data.get("room_name", "")
         # Use room_name as tag for video calls to collapse duplicate notifications on the same call
         tag = f"video_call_{room_name}" if is_call and room_name else (fcm_data.get("chat_id") or None)
@@ -104,7 +108,8 @@ def send_push_notification(token: str, title: str, body: str, data: dict = None,
         android_config = messaging.AndroidConfig(
             priority='high',
             collapse_key=f"call_{room_name}" if is_call and room_name else None,
-            notification=messaging.AndroidNotification(
+            data=fcm_data,
+            notification=None if is_call else messaging.AndroidNotification(
                 sound=call_sound,
                 click_action='FLUTTER_NOTIFICATION_CLICK',
                 channel_id=channel_id,
@@ -115,11 +120,12 @@ def send_push_notification(token: str, title: str, body: str, data: dict = None,
         )
 
         apns_config = messaging.APNSConfig(
-            headers={"apns-collapse-id": f"call_{room_name}"} if is_call and room_name else None,
+            headers={"apns-collapse-id": f"call_{room_name}", "apns-priority": "10"} if is_call and room_name else None,
             payload=messaging.APNSPayload(
                 aps=messaging.Aps(
                     badge=1,
                     sound=apns_sound,
+                    content_available=True if is_call else False,
                     mutable_content=True if image_url else False,
                 )
             ),
@@ -127,7 +133,7 @@ def send_push_notification(token: str, title: str, body: str, data: dict = None,
         )
 
         message = messaging.Message(
-            notification=messaging.Notification(
+            notification=None if is_call else messaging.Notification(
                 title=title,
                 body=body,
                 image=image_url,

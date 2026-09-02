@@ -13,7 +13,6 @@ class ScheduledCall(Base):
     call_type = Column(String, nullable=True, default="Prayer Meeting")
     room_name = Column(String, nullable=False)
     host_id = Column(String, ForeignKey("users.id"), nullable=False)
-    chat_id = Column(String, ForeignKey("chats.id"), nullable=True)
     scheduled_at = Column(DateTime(timezone=True), nullable=False)
     is_rung = Column(Boolean, default=False, nullable=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now())

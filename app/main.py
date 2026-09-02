@@ -1,20 +1,16 @@
 from fastapi import FastAPI
 from app.core import firebase  # triggers Firebase Admin init on startup
 from app.api.auth import router as auth_router
-from app.api.chats import router as chats_router
 from app.api.prayers import router as prayers_router
 from app.api.calls import router as calls_router
 from app.api.testimonies import router as testimonies_router
 from app.api.gallery import router as gallery_router
 from app.api.monthly_plans import router as monthly_plans_router
 from app.api.media import router as media_router
-from app.ws.chat import router as ws_chat_router
 from app.db.session import Base, engine
 import app.models.testimony  # noqa: F401 — registers Testimony with Base.metadata
 import app.models.call        # noqa: F401 — registers ScheduledCall, CallLog
 import app.models.user        # noqa: F401 — registers User
-import app.models.chat        # noqa: F401 — registers Chat, ChatMember
-import app.models.message     # noqa: F401 — registers Message
 import app.models.gallery     # noqa: F401 — registers GalleryItem
 import app.models.monthly_plan # noqa: F401 — registers MonthlyPlan
 
@@ -43,24 +39,8 @@ def run_migrations():
     except Exception as e:
         print(f"Error during Alembic migration: {e}")
 
-    # Ensure PostgreSQL accepts any message type (audio, video, text, image) without enum errors
     try:
         with engine.connect().execution_options(isolation_level="AUTOCOMMIT") as conn:
-            try:
-                conn.execute(text("ALTER TABLE messages ALTER COLUMN message_type TYPE VARCHAR(50) USING message_type::text;"))
-                print("PostgreSQL messages.message_type converted to VARCHAR(50) successfully!")
-            except Exception as e:
-                print(f"Note on converting message_type column: {e}")
-            try:
-                conn.execute(text("ALTER TYPE messagetype ADD VALUE IF NOT EXISTS 'audio'"))
-                conn.execute(text("ALTER TYPE messagetype ADD VALUE IF NOT EXISTS 'video'"))
-            except Exception:
-                pass
-            try:
-                conn.execute(text("ALTER TABLE messages ADD COLUMN IF NOT EXISTS reaction VARCHAR(50);"))
-                conn.execute(text("ALTER TABLE messages ADD COLUMN IF NOT EXISTS reply_to_id VARCHAR(100);"))
-            except Exception as e:
-                print(f"Note on adding reaction/reply_to_id columns: {e}")
             try:
                 conn.execute(text("ALTER TABLE scheduled_calls ADD COLUMN IF NOT EXISTS is_rung BOOLEAN DEFAULT FALSE;"))
                 print("PostgreSQL scheduled_calls.is_rung ensured successfully!")
@@ -97,14 +77,12 @@ app.add_middleware(
 )
 
 app.include_router(auth_router)
-app.include_router(chats_router)
 app.include_router(prayers_router)
 app.include_router(calls_router)
 app.include_router(testimonies_router)
 app.include_router(gallery_router)
 app.include_router(monthly_plans_router, prefix="/plans", tags=["Monthly Plans"])
 app.include_router(media_router)
-app.include_router(ws_chat_router)
 
 
 import traceback

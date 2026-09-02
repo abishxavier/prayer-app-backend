@@ -89,7 +89,6 @@ def _sync_single_plan_to_call(db: Session, plan: MonthlyPlan, user_id: str | Non
                 call_type=plan.category or "Prayer Meeting",
                 room_name=room_name,
                 host_id=host_id,
-                chat_id=None,
                 scheduled_at=scheduled_dt,
                 is_rung=False
             )
@@ -177,7 +176,6 @@ def create_monthly_plan(
                 call_type=payload.category or "Prayer Meeting",
                 room_name=room_name,
                 host_id=valid_creator_id or user_id,
-                chat_id=None,
                 scheduled_at=scheduled_dt,
                 is_rung=False
             )

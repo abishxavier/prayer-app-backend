@@ -8,7 +8,6 @@ class ScheduledCallCreate(BaseModel):
     description: Optional[str] = None
     call_type: str = "Prayer Meeting"
     room_name: str
-    chat_id: Optional[str] = None
     scheduled_at: datetime
 
 
@@ -18,7 +17,6 @@ class ScheduledCallOut(BaseModel):
     description: Optional[str] = None
     call_type: Optional[str] = "Prayer Meeting"
     room_name: str
-    chat_id: Optional[str] = None
     host_id: str
     host_name: Optional[str] = None
     scheduled_at: datetime

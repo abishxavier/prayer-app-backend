@@ -5,7 +5,6 @@ from sqlalchemy.orm import sessionmaker
 from app.db.session import engine
 from app.models.call import ScheduledCall
 from app.models.user import User
-from app.models.chat_member import ChatMember
 from app.services.fcm import send_push_notification
 
 logger = logging.getLogger(__name__)
@@ -44,28 +43,17 @@ def check_and_ring_scheduled_calls():
                 room_name = call.room_name or "prayer_call_room"
 
                 tokens_to_notify = []
-                if call.chat_id:
-                    members = db.query(ChatMember).filter(
-                        ChatMember.chat_id == call.chat_id,
-                        ChatMember.user_id != call.host_id
-                    ).all()
-                    member_ids = [m.user_id for m in members]
-                    target_users = db.query(User).filter(User.id.in_(member_ids)).all()
-                    for u in target_users:
-                        if u.device_token:
-                            tokens_to_notify.append(u.device_token)
-                else:
-                    # Community-wide scheduled prayer meeting: Ring ALL users in the app
-                    target_users = db.query(User).filter(
-                        User.device_token.isnot(None),
-                        User.device_token != ""
-                    ).all()
-                    for u in target_users:
-                        if u.device_token:
-                            tokens_to_notify.append(u.device_token)
+                # Community-wide scheduled prayer meeting: Ring ALL users in the app
+                target_users = db.query(User).filter(
+                    User.device_token.isnot(None),
+                    User.device_token != ""
+                ).all()
+                for u in target_users:
+                    if u.device_token:
+                        tokens_to_notify.append(u.device_token)
 
-                notif_title = f"📞 {topic} - Starting Now!"
-                notif_body = f"{host_name} scheduled this meeting. Tap to Join."
+                notif_title = f"{topic}"
+                notif_body = f"Host: {host_name} • Tap to Join"
                 fcm_data = {
                     "type": "video_call",
                     "notification_type": "video_call",
@@ -74,7 +62,6 @@ def check_and_ring_scheduled_calls():
                     "topic": str(topic),
                     "host_name": str(host_name),
                     "call_type": str(call_type),
-                    "chat_id": str(call.chat_id or ""),
                     "scheduled_at": call.scheduled_at.isoformat(),
                 }
 
