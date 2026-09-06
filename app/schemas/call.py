@@ -7,8 +7,23 @@ class ScheduledCallCreate(BaseModel):
     topic: str
     description: Optional[str] = None
     call_type: str = "Prayer Meeting"
-    room_name: str
+    room_name: Optional[str] = None
     scheduled_at: datetime
+    password: Optional[str] = None
+    access_type: Optional[str] = "public"
+    waiting_room_enabled: Optional[bool] = False
+    chat_enabled: Optional[bool] = True
+    screen_share_enabled: Optional[bool] = True
+
+
+class InstantMeetingCreate(BaseModel):
+    topic: Optional[str] = "Instant Meeting"
+    call_type: Optional[str] = "Video Call"
+    password: Optional[str] = None
+    access_type: Optional[str] = "public"
+    waiting_room_enabled: Optional[bool] = False
+    chat_enabled: Optional[bool] = True
+    screen_share_enabled: Optional[bool] = True
 
 
 class ScheduledCallOut(BaseModel):
@@ -17,6 +32,13 @@ class ScheduledCallOut(BaseModel):
     description: Optional[str] = None
     call_type: Optional[str] = "Prayer Meeting"
     room_name: str
+    meeting_code: Optional[str] = None
+    access_type: Optional[str] = "public"
+    status: Optional[str] = "active"
+    waiting_room_enabled: Optional[bool] = False
+    chat_enabled: Optional[bool] = True
+    screen_share_enabled: Optional[bool] = True
+    has_password: Optional[bool] = False
     host_id: str
     host_name: Optional[str] = None
     scheduled_at: datetime
@@ -31,6 +53,26 @@ class ScheduledCallOut(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+class MeetingVerifyResponse(BaseModel):
+    room_name: str
+    meeting_code: Optional[str] = None
+    topic: str
+    host_name: str
+    host_id: str
+    is_current_user_host: bool = False
+    can_join: bool = True
+    is_ended: bool = False
+    requires_password: bool = False
+    requires_waiting_room: bool = False
+    chat_enabled: bool = True
+    screen_share_enabled: bool = True
+
+
+class MeetingPasswordVerifyRequest(BaseModel):
+    room_name_or_code: str
+    password: str
 
 
 class CallLogCreate(BaseModel):
@@ -102,3 +144,56 @@ class CallParticipantOut(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+class MeetingMessageCreate(BaseModel):
+    message: str
+
+class MeetingMessageOut(BaseModel):
+    id: str
+    room_name: str
+    sender_id: str
+    sender_name: str
+    sender_image: Optional[str] = None
+    message: str
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class UserReportCreate(BaseModel):
+    reported_user_id: str
+    reason: str
+    meeting_id: Optional[str] = None
+
+class UserReportOut(BaseModel):
+    id: str
+    reporter_id: str
+    reported_user_id: str
+    meeting_id: Optional[str] = None
+    reason: str
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class BlockedUserCreate(BaseModel):
+    blocked_user_id: str
+
+class BlockedUserOut(BaseModel):
+    id: str
+    user_id: str
+    blocked_user_id: str
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class WaitingRoomAction(BaseModel):
+    room_name: str
+    uid: int
+    user_id: str
+    action: str # admit or reject

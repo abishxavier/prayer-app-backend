@@ -12,7 +12,7 @@ class GalleryItem(Base):
     title = Column(String, nullable=True)          # Optional caption/title
     description = Column(Text, nullable=True)       # Optional longer description
     image_data = Column(Text, nullable=False)        # Base64 data URL or remote URL
-    uploaded_by = Column(String, ForeignKey("users.id"), nullable=False)
+    uploaded_by = Column(String, ForeignKey("users.id"), nullable=True)
     uploader_name = Column(String, nullable=True)   # Denormalized for speed
     is_featured = Column(Boolean, default=False)    # Pin to top of gallery
     sort_order = Column(Integer, default=0)         # Manual ordering

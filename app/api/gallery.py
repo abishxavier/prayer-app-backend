@@ -224,20 +224,21 @@ def delete_gallery_item(
     db: Session = Depends(get_db),
     current_user: dict = Depends(get_current_user),
 ):
-    """Delete a gallery item. Only the uploader can delete their own items."""
-    user_id = current_user["sub"]
-    user = db.query(User).filter(User.id == user_id).first()
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
+    """Delete a gallery item. Allowed for the uploader or any authorized admin."""
+    user_id = current_user.get("sub") or current_user.get("user_id") or current_user.get("id")
+    user = db.query(User).filter(User.id == user_id).first() if user_id else None
+    if not user and current_user.get("email"):
+        user = db.query(User).filter(User.email == current_user.get("email")).first()
 
     item = db.query(GalleryItem).filter(GalleryItem.id == item_id).first()
     if not item:
         raise HTTPException(status_code=404, detail="Gallery item not found")
 
-    if item.uploaded_by != user.id:
-        raise HTTPException(status_code=403, detail="You can only delete your own gallery items")
+    if user:
+        if str(item.uploaded_by) != str(user.id) and not _is_admin(user):
+            raise HTTPException(status_code=403, detail="Admin authorization or ownership required to delete gallery item")
 
     db.delete(item)
     db.commit()
-    return {"success": True}
+    return {"success": True, "message": "Gallery item deleted successfully"}
 

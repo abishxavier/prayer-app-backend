@@ -1,18 +1,57 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
-from typing import List
-from datetime import datetime, timezone
+from typing import List, Optional
+from datetime import datetime, timezone, timedelta
+import secrets
+import string
+import hashlib
 
 from app.db.session import get_db
 from app.core.security import get_current_user
-from app.models.call import ScheduledCall
+from app.models.call import ScheduledCall, CallLog, MeetingMessage, UserReport, BlockedUser
 from app.models.user import User
-from app.schemas.call import ScheduledCallCreate, ScheduledCallOut
+from app.schemas.call import (
+    ScheduledCallCreate,
+    ScheduledCallOut,
+    InstantMeetingCreate,
+    MeetingVerifyResponse,
+    MeetingPasswordVerifyRequest,
+    MeetingMessageCreate,
+    MeetingMessageOut,
+    UserReportCreate,
+    UserReportOut,
+    BlockedUserCreate,
+    BlockedUserOut,
+    WaitingRoomAction,
+)
 
 router = APIRouter()
 
-
 from app.services.fcm import send_push_notification
+
+
+def hash_meeting_password(password: str) -> str:
+    salt = "jipf_prayer_meet_salt_2026"
+    return hashlib.sha256(f"{salt}_{password.strip()}".encode("utf-8")).hexdigest()
+
+
+def verify_meeting_password(plain_password: str, hashed_password: Optional[str]) -> bool:
+    if not hashed_password:
+        return True
+    return hash_meeting_password(plain_password) == hashed_password
+
+
+def generate_meeting_code(db: Session) -> str:
+    chars = string.ascii_lowercase + string.digits
+    for _ in range(25):
+        p1 = "".join(secrets.choice(chars) for _ in range(3))
+        p2 = "".join(secrets.choice(chars) for _ in range(4))
+        p3 = "".join(secrets.choice(chars) for _ in range(3))
+        code = f"{p1}-{p2}-{p3}"
+        if not db.query(ScheduledCall).filter(ScheduledCall.meeting_code == code).first():
+            return code
+    return f"meet-{secrets.token_hex(4)}"
+
 
 @router.post("/calls/scheduled", response_model=ScheduledCallOut)
 def schedule_call(payload: ScheduledCallCreate, db: Session = Depends(get_db), current_user: dict = Depends(get_current_user)):
@@ -33,53 +72,33 @@ def schedule_call(payload: ScheduledCallCreate, db: Session = Depends(get_db), c
             status_code=400,
             detail="Cannot schedule a meeting in the past. Please select a future date and time."
         )
-        
+
+    room_name = (payload.room_name or "").strip()
+    if not room_name:
+        room_name = f"room_{secrets.token_hex(6)}"
+
+    meeting_code = generate_meeting_code(db)
+    password_hash = hash_meeting_password(payload.password) if payload.password else None
+    access_type = "password" if password_hash else (payload.access_type or "public")
+
     call = ScheduledCall(
         topic=payload.topic,
         description=payload.description,
         call_type=payload.call_type,
-        room_name=payload.room_name,
+        room_name=room_name,
+        meeting_code=meeting_code,
+        password_hash=password_hash,
+        access_type=access_type,
+        status="created",
+        waiting_room_enabled=payload.waiting_room_enabled or False,
+        chat_enabled=payload.chat_enabled if payload.chat_enabled is not None else True,
+        screen_share_enabled=payload.screen_share_enabled if payload.screen_share_enabled is not None else True,
         host_id=user_id,
         scheduled_at=sched_utc
     )
     db.add(call)
     db.commit()
     db.refresh(call)
-    
-    # ── Dispatch FCM Push Notification for the Video Call ──
-    try:
-        tokens_to_notify = []
-        # Community-wide scheduled prayer meeting — notify all users
-        target_users = db.query(User).filter(
-            User.id != user_id,
-            User.device_token.isnot(None),
-            User.device_token != ""
-        ).all()
-        for u in target_users:
-            if u.device_token:
-                tokens_to_notify.append(u.device_token)
-
-        notif_title = f"📅 Prayer Meeting Scheduled: {call.topic}"
-        notif_body = f"{user.name} scheduled a {call.call_type or 'Prayer Meeting'}. Tap to view details!"
-        fcm_data = {
-            "type": "meeting_scheduled",
-            "notification_type": "meeting_scheduled",
-            "room_name": str(call.room_name),
-            "topic": str(call.topic),
-            "host_name": str(user.name or "Host"),
-            "call_type": str(call.call_type or "Prayer Meeting"),
-            "scheduled_at": call.scheduled_at.isoformat() if call.scheduled_at else "",
-        }
-
-        for tok in set(tokens_to_notify):
-            send_push_notification(
-                token=tok,
-                title=notif_title,
-                body=notif_body,
-                data=fcm_data,
-            )
-    except Exception as e:
-        print(f"Error dispatching scheduled call notification: {e}")
 
     return ScheduledCallOut(
         id=call.id,
@@ -87,6 +106,13 @@ def schedule_call(payload: ScheduledCallCreate, db: Session = Depends(get_db), c
         description=call.description,
         call_type=call.call_type,
         room_name=call.room_name,
+        meeting_code=call.meeting_code,
+        access_type=call.access_type,
+        status=call.status,
+        waiting_room_enabled=call.waiting_room_enabled,
+        chat_enabled=call.chat_enabled,
+        screen_share_enabled=call.screen_share_enabled,
+        has_password=bool(call.password_hash),
         host_id=call.host_id,
         host_name=user.name,
         scheduled_at=call.scheduled_at,
@@ -99,11 +125,11 @@ _live_meeting_intentions: dict[str, list[dict]] = {}
 _live_call_participants: dict[str, dict[int, dict]] = {}
 _room_lifetime_stats: dict[str, dict] = {}
 _ended_meeting_rooms: set[str] = set()
+_waiting_room_participants: dict[str, dict[str, dict]] = {}
 
 
 @router.get("/calls/scheduled", response_model=List[ScheduledCallOut])
 def get_scheduled_calls(db: Session = Depends(get_db), current_user: dict = Depends(get_current_user)):
-    # Order by newest created / scheduled first so latest meetings appear at the top
     calls = db.query(ScheduledCall).order_by(ScheduledCall.created_at.desc(), ScheduledCall.scheduled_at.desc()).all()
     now = datetime.now(timezone.utc)
     
@@ -123,8 +149,6 @@ def get_scheduled_calls(db: Session = Depends(get_db), current_user: dict = Depe
         total_joined = max(stats.get("total_joined", 0), active_count)
         left_count = max(0, total_joined - active_count)
 
-        # Time gating calculation:
-        # User can only join starting 10 minutes before scheduled_at until 90 minutes after scheduled_at
         scheduled_utc = call.scheduled_at
         if scheduled_utc.tzinfo is None:
             scheduled_utc = scheduled_utc.replace(tzinfo=timezone.utc)
@@ -132,8 +156,9 @@ def get_scheduled_calls(db: Session = Depends(get_db), current_user: dict = Depe
         diff_seconds = (scheduled_utc - now).total_seconds()
         minutes_until = int(diff_seconds // 60)
         
-        is_expired = diff_seconds < -5400  # More than 90 minutes past scheduled time
-        is_live = (-5400 <= diff_seconds <= 600) and not is_expired  # Within 10 mins before or during meeting
+        is_ended = (room in _ended_meeting_rooms) or (call.status == "ended")
+        is_expired = is_ended or (diff_seconds < -5400)
+        is_live = (-5400 <= diff_seconds <= 600) and not is_expired
         can_join = is_live and not is_expired
 
         result.append(ScheduledCallOut(
@@ -142,6 +167,13 @@ def get_scheduled_calls(db: Session = Depends(get_db), current_user: dict = Depe
             description=call.description,
             call_type=call.call_type,
             room_name=call.room_name,
+            meeting_code=call.meeting_code,
+            access_type=call.access_type or "public",
+            status="ended" if is_expired else (call.status or "active"),
+            waiting_room_enabled=call.waiting_room_enabled or False,
+            chat_enabled=call.chat_enabled if call.chat_enabled is not None else True,
+            screen_share_enabled=call.screen_share_enabled if call.screen_share_enabled is not None else True,
+            has_password=bool(call.password_hash),
             host_id=call.host_id,
             host_name=host.name if host else "Unknown",
             scheduled_at=call.scheduled_at,
@@ -604,6 +636,345 @@ def delete_scheduled_meeting(
     db.commit()
 
     return {"status": "ok", "deleted": deleted_count}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Google Meet-Style Advanced Meeting APIs
+# ─────────────────────────────────────────────────────────────────────────────
+
+@router.post("/api/meetings/instant", response_model=ScheduledCallOut)
+def create_instant_meeting(
+    payload: InstantMeetingCreate,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    """Create a new instant meeting immediately with Google Meet code and optional password."""
+    user_id = current_user["sub"]
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    now = datetime.now(timezone.utc)
+    meeting_code = generate_meeting_code(db)
+    room_name = f"meet_{secrets.token_hex(6)}"
+    password_hash = hash_meeting_password(payload.password) if payload.password else None
+    access_type = "password" if password_hash else (payload.access_type or "public")
+
+    call = ScheduledCall(
+        topic=(payload.topic or "Instant Meeting").strip(),
+        description="Instant video meeting",
+        call_type=payload.call_type or "Video Call",
+        room_name=room_name,
+        meeting_code=meeting_code,
+        password_hash=password_hash,
+        access_type=access_type,
+        status="active",
+        waiting_room_enabled=payload.waiting_room_enabled or False,
+        chat_enabled=payload.chat_enabled if payload.chat_enabled is not None else True,
+        screen_share_enabled=payload.screen_share_enabled if payload.screen_share_enabled is not None else True,
+        host_id=user_id,
+        scheduled_at=now,
+    )
+    db.add(call)
+    db.commit()
+    db.refresh(call)
+
+    return ScheduledCallOut(
+        id=call.id,
+        topic=call.topic,
+        description=call.description,
+        call_type=call.call_type,
+        room_name=call.room_name,
+        meeting_code=call.meeting_code,
+        access_type=call.access_type,
+        status=call.status,
+        waiting_room_enabled=call.waiting_room_enabled,
+        chat_enabled=call.chat_enabled,
+        screen_share_enabled=call.screen_share_enabled,
+        has_password=bool(call.password_hash),
+        host_id=call.host_id,
+        host_name=user.name,
+        scheduled_at=call.scheduled_at,
+        created_at=call.created_at,
+        can_join=True,
+        is_live=True,
+        is_expired=False,
+    )
+
+
+@router.get("/api/meetings/verify/{code_or_room}", response_model=MeetingVerifyResponse)
+def verify_meeting_access(
+    code_or_room: str,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    Look up a meeting by unique meeting code (e.g. ABC-123-XYZ), room_name, or ID.
+    Validates whether meeting exists, whether it has ended, whether password or waiting room approval is required,
+    and checks if user is blocked by host.
+    """
+    user_id = current_user["sub"]
+    clean_target = code_or_room.strip().lower()
+
+    call = db.query(ScheduledCall).filter(
+        (ScheduledCall.meeting_code == clean_target) |
+        (ScheduledCall.room_name == clean_target) |
+        (ScheduledCall.room_name == code_or_room) |
+        (ScheduledCall.id == code_or_room)
+    ).first()
+
+    if not call:
+        raise HTTPException(status_code=404, detail="Meeting not found. Please check your meeting code or link.")
+
+    host = db.query(User).filter(User.id == call.host_id).first()
+    host_name = host.name if host else "Host"
+    is_host = str(call.host_id) == str(user_id)
+
+    # Check if this user is blocked by host
+    blocked_record = db.query(BlockedUser).filter(
+        BlockedUser.user_id == call.host_id,
+        BlockedUser.blocked_user_id == user_id
+    ).first()
+    if blocked_record:
+        raise HTTPException(status_code=403, detail="You are blocked from joining this host's meetings.")
+
+    # Check if meeting has ended
+    now = datetime.now(timezone.utc)
+    scheduled_utc = call.scheduled_at
+    if scheduled_utc.tzinfo is None:
+        scheduled_utc = scheduled_utc.replace(tzinfo=timezone.utc)
+    diff_seconds = (scheduled_utc - now).total_seconds()
+
+    is_ended = (call.room_name in _ended_meeting_rooms) or (call.status == "ended") or (diff_seconds < -7200)
+
+    requires_password = bool(call.password_hash) and not is_host
+    requires_waiting_room = bool(call.waiting_room_enabled) and not is_host
+
+    return MeetingVerifyResponse(
+        room_name=call.room_name,
+        meeting_code=call.meeting_code,
+        topic=call.topic,
+        host_name=host_name,
+        host_id=call.host_id,
+        is_current_user_host=is_host,
+        can_join=not is_ended,
+        is_ended=is_ended,
+        requires_password=requires_password,
+        requires_waiting_room=requires_waiting_room,
+        chat_enabled=call.chat_enabled if call.chat_enabled is not None else True,
+        screen_share_enabled=call.screen_share_enabled if call.screen_share_enabled is not None else True,
+    )
+
+
+@router.post("/api/meetings/verify-password")
+def verify_meeting_password_endpoint(
+    payload: MeetingPasswordVerifyRequest,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    """Verify password for a password-protected meeting room."""
+    target = payload.room_name_or_code.strip().lower()
+    call = db.query(ScheduledCall).filter(
+        (ScheduledCall.meeting_code == target) |
+        (ScheduledCall.room_name == target) |
+        (ScheduledCall.room_name == payload.room_name_or_code) |
+        (ScheduledCall.id == payload.room_name_or_code)
+    ).first()
+
+    if not call:
+        raise HTTPException(status_code=404, detail="Meeting not found")
+
+    if not call.password_hash:
+        return {"valid": True, "room_name": call.room_name}
+
+    valid = verify_meeting_password(payload.password, call.password_hash)
+    if not valid:
+        raise HTTPException(status_code=401, detail="Invalid meeting password. Please try again.")
+
+    return {"valid": True, "room_name": call.room_name}
+
+
+# ── Waiting Room Endpoints ──
+
+@router.post("/api/meetings/{room_name}/waiting/request")
+def request_waiting_room_admission(
+    room_name: str,
+    payload: dict,
+    current_user: dict = Depends(get_current_user)
+):
+    """Guest requests entry into the meeting waiting room."""
+    user_id = str(current_user["sub"])
+    uid = str(payload.get("uid", "0"))
+    name = str(payload.get("name", "Guest")).strip()
+    photo = payload.get("photo", None)
+
+    if room_name not in _waiting_room_participants:
+        _waiting_room_participants[room_name] = {}
+
+    _waiting_room_participants[room_name][uid] = {
+        "uid": uid,
+        "user_id": user_id,
+        "name": name,
+        "photo": photo,
+        "status": "waiting",
+        "requested_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+    return {"status": "waiting", "uid": uid}
+
+
+@router.get("/api/meetings/{room_name}/waiting")
+def list_waiting_room_participants(
+    room_name: str,
+    current_user: dict = Depends(get_current_user)
+):
+    """Host views list of guests currently in the waiting room."""
+    room_waiting = _waiting_room_participants.get(room_name, {})
+    return list(room_waiting.values())
+
+
+@router.post("/api/meetings/{room_name}/waiting/action")
+def waiting_room_action(
+    room_name: str,
+    payload: WaitingRoomAction,
+    current_user: dict = Depends(get_current_user)
+):
+    """Host admits or rejects a participant waiting to join."""
+    uid = str(payload.uid)
+    room_waiting = _waiting_room_participants.get(room_name, {})
+
+    if uid in room_waiting:
+        if payload.action == "admit":
+            room_waiting[uid]["status"] = "admitted"
+        elif payload.action == "reject":
+            room_waiting[uid]["status"] = "rejected"
+
+    return {"status": "ok", "action": payload.action, "uid": uid}
+
+
+@router.get("/api/meetings/{room_name}/waiting/status/{uid}")
+def check_waiting_room_status(
+    room_name: str,
+    uid: int,
+    current_user: dict = Depends(get_current_user)
+):
+    """Guest checks their admission status in waiting room."""
+    uid_str = str(uid)
+    room_waiting = _waiting_room_participants.get(room_name, {})
+    user_state = room_waiting.get(uid_str, {})
+    return {"status": user_state.get("status", "waiting")}
+
+
+# ── In-Meeting Chat Storage & History ──
+
+@router.get("/api/meetings/{room_name}/messages", response_model=List[MeetingMessageOut])
+def get_meeting_messages(
+    room_name: str,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    """Retrieve chat history for this meeting room."""
+    msgs = db.query(MeetingMessage).filter(MeetingMessage.room_name == room_name).order_by(MeetingMessage.created_at.asc()).limit(200).all()
+    return msgs
+
+
+@router.post("/api/meetings/{room_name}/messages", response_model=MeetingMessageOut)
+def send_meeting_message(
+    room_name: str,
+    payload: MeetingMessageCreate,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    """Post an in-meeting chat message."""
+    user_id = current_user["sub"]
+    user = db.query(User).filter(User.id == user_id).first()
+    sender_name = user.name if user else "Participant"
+    sender_image = user.profile_image if user else None
+
+    msg = MeetingMessage(
+        room_name=room_name,
+        sender_id=str(user_id),
+        sender_name=sender_name,
+        sender_image=sender_image,
+        message=payload.message.strip(),
+    )
+    db.add(msg)
+    db.commit()
+    db.refresh(msg)
+    return msg
+
+
+# ── User Block & Report ──
+
+@router.post("/api/users/block")
+def block_user(
+    payload: BlockedUserCreate,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    """Block a user from direct calls and joining meetings."""
+    user_id = current_user["sub"]
+    if str(user_id) == str(payload.blocked_user_id):
+        raise HTTPException(status_code=400, detail="Cannot block yourself.")
+
+    existing = db.query(BlockedUser).filter(
+        BlockedUser.user_id == user_id,
+        BlockedUser.blocked_user_id == payload.blocked_user_id
+    ).first()
+
+    if not existing:
+        block_entry = BlockedUser(user_id=user_id, blocked_user_id=payload.blocked_user_id)
+        db.add(block_entry)
+        db.commit()
+
+    return {"status": "ok", "message": "User blocked successfully."}
+
+
+@router.get("/api/users/blocked", response_model=List[BlockedUserOut])
+def get_blocked_users(
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    """List users blocked by current user."""
+    user_id = current_user["sub"]
+    return db.query(BlockedUser).filter(BlockedUser.user_id == user_id).all()
+
+
+@router.post("/api/users/unblock")
+def unblock_user(
+    payload: BlockedUserCreate,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    """Unblock a user."""
+    user_id = current_user["sub"]
+    db.query(BlockedUser).filter(
+        BlockedUser.user_id == user_id,
+        BlockedUser.blocked_user_id == payload.blocked_user_id
+    ).delete()
+    db.commit()
+    return {"status": "ok", "message": "User unblocked successfully."}
+
+
+@router.post("/api/reports", response_model=UserReportOut)
+def report_user(
+    payload: UserReportCreate,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    """Report a user for spam, harassment, abuse, inappropriate behavior, or other."""
+    user_id = current_user["sub"]
+    report = UserReport(
+        reporter_id=user_id,
+        reported_user_id=payload.reported_user_id,
+        meeting_id=payload.meeting_id,
+        reason=payload.reason,
+    )
+    db.add(report)
+    db.commit()
+    db.refresh(report)
+    return report
+
 
 
 
