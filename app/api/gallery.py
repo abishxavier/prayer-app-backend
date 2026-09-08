@@ -78,6 +78,19 @@ def _item_to_dict(item: GalleryItem) -> dict:
     }
 
 
+import time
+
+_gallery_cache = None
+_gallery_cache_time = 0.0
+GALLERY_CACHE_TTL = 300.0  # 5 minutes in-memory cache
+
+
+def _invalidate_gallery_cache():
+    global _gallery_cache, _gallery_cache_time
+    _gallery_cache = None
+    _gallery_cache_time = 0.0
+
+
 # ── Routes ────────────────────────────────────────────────────────────────────
 
 @router.get("/gallery")
@@ -85,7 +98,12 @@ def list_gallery(
     db: Session = Depends(get_db),
     current_user: dict = Depends(get_current_user),
 ):
-    """Returns all gallery items, featured first, then sorted by sort_order desc, then newest first."""
+    """Returns all gallery items with 5-minute in-memory caching to save Supabase egress bandwidth."""
+    global _gallery_cache, _gallery_cache_time
+    now = time.time()
+    if _gallery_cache is not None and (now - _gallery_cache_time) < GALLERY_CACHE_TTL:
+        return _gallery_cache
+
     items = (
         db.query(GalleryItem)
         .order_by(
@@ -95,7 +113,10 @@ def list_gallery(
         )
         .all()
     )
-    return [_item_to_dict(i) for i in items]
+    result = [_item_to_dict(i) for i in items]
+    _gallery_cache = result
+    _gallery_cache_time = now
+    return result
 
 
 @router.post("/gallery")
@@ -135,6 +156,7 @@ def add_gallery_item(
     db.add(item)
     db.commit()
     db.refresh(item)
+    _invalidate_gallery_cache()
     return _item_to_dict(item)
 
 
@@ -181,6 +203,7 @@ def add_gallery_items_batch(
     for item in created_items:
         db.refresh(item)
 
+    _invalidate_gallery_cache()
     return [_item_to_dict(i) for i in created_items]
 
 
@@ -215,6 +238,7 @@ def update_gallery_item(
 
     db.commit()
     db.refresh(item)
+    _invalidate_gallery_cache()
     return _item_to_dict(item)
 
 
@@ -240,5 +264,6 @@ def delete_gallery_item(
 
     db.delete(item)
     db.commit()
+    _invalidate_gallery_cache()
     return {"success": True, "message": "Gallery item deleted successfully"}
 

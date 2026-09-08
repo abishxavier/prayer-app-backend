@@ -41,11 +41,23 @@ def run_migrations():
 
     try:
         with engine.connect().execution_options(isolation_level="AUTOCOMMIT") as conn:
-            try:
-                conn.execute(text("ALTER TABLE scheduled_calls ADD COLUMN IF NOT EXISTS is_rung BOOLEAN DEFAULT FALSE;"))
-                print("PostgreSQL scheduled_calls.is_rung ensured successfully!")
-            except Exception as e:
-                print(f"Note on adding scheduled_calls.is_rung: {e}")
+            migration_statements = [
+                "ALTER TABLE scheduled_calls ADD COLUMN IF NOT EXISTS is_rung BOOLEAN DEFAULT FALSE;",
+                "ALTER TABLE scheduled_calls ADD COLUMN IF NOT EXISTS meeting_code VARCHAR(64);",
+                "ALTER TABLE scheduled_calls ADD COLUMN IF NOT EXISTS password_hash VARCHAR(255);",
+                "ALTER TABLE scheduled_calls ADD COLUMN IF NOT EXISTS access_type VARCHAR(32) DEFAULT 'public';",
+                "ALTER TABLE scheduled_calls ADD COLUMN IF NOT EXISTS status VARCHAR(32) DEFAULT 'active';",
+                "ALTER TABLE scheduled_calls ADD COLUMN IF NOT EXISTS waiting_room_enabled BOOLEAN DEFAULT FALSE;",
+                "ALTER TABLE scheduled_calls ADD COLUMN IF NOT EXISTS chat_enabled BOOLEAN DEFAULT TRUE;",
+                "ALTER TABLE scheduled_calls ADD COLUMN IF NOT EXISTS screen_share_enabled BOOLEAN DEFAULT TRUE;",
+                "ALTER TABLE scheduled_calls ADD COLUMN IF NOT EXISTS ended_at TIMESTAMPTZ;",
+            ]
+            for stmt in migration_statements:
+                try:
+                    conn.execute(text(stmt))
+                except Exception as stmt_err:
+                    print(f"Schema migration statement note ({stmt[:40]}...): {stmt_err}")
+            print("PostgreSQL scheduled_calls Google Meet columns ensured successfully!")
     except Exception as e:
         print(f"Schema update note (non-fatal): {e}")
 
@@ -83,6 +95,12 @@ app.include_router(testimonies_router)
 app.include_router(gallery_router)
 app.include_router(monthly_plans_router, prefix="/plans", tags=["Monthly Plans"])
 app.include_router(media_router)
+from app.api.bible import router as bible_router
+app.include_router(bible_router)
+from app.api.websocket import router as websocket_router
+app.include_router(websocket_router)
+from app.api.app_update import router as app_update_router
+app.include_router(app_update_router)
 
 
 import traceback

@@ -100,6 +100,13 @@ def schedule_call(payload: ScheduledCallCreate, db: Session = Depends(get_db), c
     db.commit()
     db.refresh(call)
 
+    # Invalidate in-memory ringer cache so the new call is tracked immediately
+    try:
+        from app.services.call_scheduler import invalidate_scheduled_calls_cache
+        invalidate_scheduled_calls_cache()
+    except Exception:
+        pass
+
     return ScheduledCallOut(
         id=call.id,
         topic=call.topic,
