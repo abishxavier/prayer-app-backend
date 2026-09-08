@@ -1,18 +1,27 @@
-from fastapi import FastAPI
-from app.core import firebase  # triggers Firebase Admin init on startup
-from app.api.auth import router as auth_router
-from app.api.prayers import router as prayers_router
-from app.api.calls import router as calls_router
-from app.api.testimonies import router as testimonies_router
-from app.api.gallery import router as gallery_router
-from app.api.monthly_plans import router as monthly_plans_router
-from app.api.media import router as media_router
-from app.db.session import Base, engine
-import app.models.testimony  # noqa: F401 — registers Testimony with Base.metadata
-import app.models.call        # noqa: F401 — registers ScheduledCall, CallLog
-import app.models.user        # noqa: F401 — registers User
-import app.models.gallery     # noqa: F401 — registers GalleryItem
-import app.models.monthly_plan # noqa: F401 — registers MonthlyPlan
+import sys
+import traceback as _traceback
+
+try:
+    from fastapi import FastAPI
+    from app.core import firebase  # triggers Firebase Admin init on startup
+    from app.api.auth import router as auth_router
+    from app.api.prayers import router as prayers_router
+    from app.api.calls import router as calls_router
+    from app.api.testimonies import router as testimonies_router
+    from app.api.gallery import router as gallery_router
+    from app.api.monthly_plans import router as monthly_plans_router
+    from app.api.media import router as media_router
+    from app.db.session import Base, engine
+    import app.models.testimony  # noqa: F401 — registers Testimony with Base.metadata
+    import app.models.call        # noqa: F401 — registers ScheduledCall, CallLog
+    import app.models.user        # noqa: F401 — registers User
+    import app.models.gallery     # noqa: F401 — registers GalleryItem
+    import app.models.monthly_plan # noqa: F401 — registers MonthlyPlan
+    print("STARTUP: All modules imported successfully.", flush=True)
+except Exception as _startup_exc:
+    print("FATAL STARTUP IMPORT ERROR:", flush=True)
+    _traceback.print_exc()
+    sys.exit(1)
 
 # Database initialization is handled non-blockingly during app startup
 
