@@ -1,5 +1,11 @@
-# Secrets
+# Secrets & Credentials
 .env
+.env.*
+*.secret
+*.pem
+*.key
+*service-account*.json
+*credentials*.json
 app/core/firebase-service-account.json
 
 # Python
