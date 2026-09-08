@@ -15,7 +15,10 @@ import app.models.gallery     # noqa: F401 — registers GalleryItem
 import app.models.monthly_plan # noqa: F401 — registers MonthlyPlan
 
 # Ensure all tables are created
-Base.metadata.create_all(bind=engine)
+try:
+    Base.metadata.create_all(bind=engine)
+except Exception as e:
+    print(f"Table creation note (non-fatal): {e}")
 
 # Run Alembic migrations programmatically on startup
 import os
@@ -61,7 +64,10 @@ def run_migrations():
     except Exception as e:
         print(f"Schema update note (non-fatal): {e}")
 
-run_migrations()
+try:
+    run_migrations()
+except Exception as e:
+    print(f"Startup migrations note (non-fatal): {e}")
 
 from fastapi.responses import JSONResponse
 
