@@ -14,11 +14,7 @@ import app.models.user        # noqa: F401 — registers User
 import app.models.gallery     # noqa: F401 — registers GalleryItem
 import app.models.monthly_plan # noqa: F401 — registers MonthlyPlan
 
-# Ensure all tables are created
-try:
-    Base.metadata.create_all(bind=engine)
-except Exception as e:
-    print(f"Table creation note (non-fatal): {e}")
+# Database initialization is handled non-blockingly during app startup
 
 # Run Alembic migrations programmatically on startup
 import os
@@ -64,11 +60,6 @@ def run_migrations():
     except Exception as e:
         print(f"Schema update note (non-fatal): {e}")
 
-try:
-    run_migrations()
-except Exception as e:
-    print(f"Startup migrations note (non-fatal): {e}")
-
 from fastapi.responses import JSONResponse
 
 class UTF8JSONResponse(JSONResponse):
@@ -81,7 +72,21 @@ from app.services.call_scheduler import scheduled_call_ringer_worker
 
 @app.on_event("startup")
 async def on_startup():
-    # Start background auto-ringer task to ring all app users at scheduled meeting times
+    # Run DB schema init & migrations in a background thread so port 8080 opens instantly
+    def _init_db_in_background():
+        try:
+            Base.metadata.create_all(bind=engine)
+            print("Base.metadata.create_all completed in background.")
+        except Exception as e:
+            print(f"Table creation note (non-fatal): {e}")
+        try:
+            run_migrations()
+        except Exception as e:
+            print(f"Startup migrations note (non-fatal): {e}")
+
+    asyncio.create_task(asyncio.to_thread(_init_db_in_background))
+
+    # Start background auto-ringer task
     asyncio.create_task(scheduled_call_ringer_worker())
 
 from fastapi.middleware.cors import CORSMiddleware
