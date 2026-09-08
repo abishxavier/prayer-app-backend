@@ -1,0 +1,52 @@
+﻿steps:
+  # Step 1: Build the Docker image
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - 'build'
+      - '--no-cache'
+      - '-t'
+      - 'asia-south1-docker.pkg.dev//cloud-run-source-deploy/prayer-app-backend:'
+      - '-t'
+      - 'asia-south1-docker.pkg.dev//cloud-run-source-deploy/prayer-app-backend:latest'
+      - '.'
+
+  # Step 2: Push to Artifact Registry
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - 'push'
+      - 'asia-south1-docker.pkg.dev//cloud-run-source-deploy/prayer-app-backend:'
+
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - 'push'
+      - 'asia-south1-docker.pkg.dev//cloud-run-source-deploy/prayer-app-backend:latest'
+
+  # Step 3: Deploy to Cloud Run with all required environment variables
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    entrypoint: gcloud
+    args:
+      - 'run'
+      - 'services'
+      - 'update'
+      - 'prayer-app-backend'
+      - '--image=asia-south1-docker.pkg.dev//cloud-run-source-deploy/prayer-app-backend:'
+      - '--region=asia-south1'
+      - '--platform=managed'
+      - '--update-env-vars=DATABASE_URL=DATABASE_URL,JWT_SECRET=JWT_SECRET,FIREBASE_CREDENTIALS_PATH=app/core/firebase-service-account.json,AGORA_APP_ID=AGORA_APP_ID,AGORA_APP_CERTIFICATE=AGORA_APP_CERTIFICATE'
+
+availableSecrets:
+  secretManager:
+    - versionName: projects//secrets/DATABASE_URL/versions/latest
+      env: 'DATABASE_URL'
+    - versionName: projects//secrets/JWT_SECRET/versions/latest
+      env: 'JWT_SECRET'
+    - versionName: projects//secrets/AGORA_APP_ID/versions/latest
+      env: 'AGORA_APP_ID'
+    - versionName: projects//secrets/AGORA_APP_CERTIFICATE/versions/latest
+      env: 'AGORA_APP_CERTIFICATE'
+
+images:
+  - 'asia-south1-docker.pkg.dev//cloud-run-source-deploy/prayer-app-backend:'
+
+options:
+  logging: CLOUD_LOGGING_ONLY

@@ -70,33 +70,35 @@ def run_migrations():
         print(f"Schema update note (non-fatal): {e}")
 
 from fastapi.responses import JSONResponse
+from contextlib import asynccontextmanager
 
 class UTF8JSONResponse(JSONResponse):
     media_type = "application/json; charset=utf-8"
 
-app = FastAPI(title="Prayer App API", default_response_class=UTF8JSONResponse)
-
 import asyncio
 from app.services.call_scheduler import scheduled_call_ringer_worker
 
-@app.on_event("startup")
-async def on_startup():
+@asynccontextmanager
+async def lifespan(fastapi_app):
     # Run DB schema init & migrations in a background thread so port 8080 opens instantly
     def _init_db_in_background():
         try:
             Base.metadata.create_all(bind=engine)
-            print("Base.metadata.create_all completed in background.")
+            print("Base.metadata.create_all completed in background.", flush=True)
         except Exception as e:
-            print(f"Table creation note (non-fatal): {e}")
+            print(f"Table creation note (non-fatal): {e}", flush=True)
         try:
             run_migrations()
         except Exception as e:
-            print(f"Startup migrations note (non-fatal): {e}")
+            print(f"Startup migrations note (non-fatal): {e}", flush=True)
 
     asyncio.create_task(asyncio.to_thread(_init_db_in_background))
-
     # Start background auto-ringer task
     asyncio.create_task(scheduled_call_ringer_worker())
+    yield  # App runs here
+    # Shutdown logic (if any) goes after yield
+
+app = FastAPI(title="Prayer App API", default_response_class=UTF8JSONResponse, lifespan=lifespan)
 
 from fastapi.middleware.cors import CORSMiddleware
 

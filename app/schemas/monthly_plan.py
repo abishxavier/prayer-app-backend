@@ -1,4 +1,4 @@
-from pydantic import BaseModel
+﻿from pydantic import BaseModel, ConfigDict
 from typing import Optional, Union, Any
 from datetime import datetime, date
 
@@ -40,6 +40,4 @@ class MonthlyPlanOut(BaseModel):
     completed: bool = False
     created_by: Optional[str] = None
     created_at: Optional[datetime] = None
-
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)

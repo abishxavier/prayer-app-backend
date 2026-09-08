@@ -1,4 +1,4 @@
-from pydantic import BaseModel
+﻿from pydantic import BaseModel, ConfigDict
 from datetime import datetime
 from typing import Optional
 
@@ -50,9 +50,7 @@ class ScheduledCallOut(BaseModel):
     is_live: Optional[bool] = False
     is_expired: Optional[bool] = False
     minutes_until: Optional[int] = None
-
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class MeetingVerifyResponse(BaseModel):
@@ -95,9 +93,7 @@ class CallLogOut(BaseModel):
     started_at: Optional[datetime] = None
     ended_at: Optional[datetime] = None
     created_at: datetime
-
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class MeetingIntentionCreate(BaseModel):
@@ -119,9 +115,7 @@ class MeetingIntentionOut(BaseModel):
     is_featured: bool = False
     is_prayed: bool = False
     created_at: datetime
-
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class CallParticipantRegister(BaseModel):
@@ -141,9 +135,7 @@ class CallParticipantOut(BaseModel):
     is_screen_sharing: bool = False
     is_hand_raised: bool = False
     last_seen: datetime
-
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class MeetingMessageCreate(BaseModel):
@@ -157,9 +149,7 @@ class MeetingMessageOut(BaseModel):
     sender_image: Optional[str] = None
     message: str
     created_at: datetime
-
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class UserReportCreate(BaseModel):
@@ -174,9 +164,7 @@ class UserReportOut(BaseModel):
     meeting_id: Optional[str] = None
     reason: str
     created_at: datetime
-
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class BlockedUserCreate(BaseModel):
@@ -187,9 +175,7 @@ class BlockedUserOut(BaseModel):
     user_id: str
     blocked_user_id: str
     created_at: datetime
-
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class WaitingRoomAction(BaseModel):
