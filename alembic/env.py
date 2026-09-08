@@ -5,14 +5,13 @@ sys.path.append(os.getcwd())
 from app.db.session import Base
 from app.core.config import settings
 from app.models.user import User
-from app.models.chat import Chat
-from app.models.chat_member import ChatMember
-from app.models.message import Message
 from app.models.prayer_request import PrayerRequest
 from app.models.prayer_response import PrayerResponse
 from app.models.refresh_token import RefreshToken
-from app.models.call import ScheduledCall
-from app.models.blocked_user import BlockedUser
+from app.models.call import ScheduledCall, CallLog, BlockedUser
+from app.models.gallery import GalleryItem
+from app.models.monthly_plan import MonthlyPlan
+from app.models.testimony import Testimony
 
 target_metadata = Base.metadata
 
@@ -24,7 +23,7 @@ from alembic import context
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.
 config = context.config
-config.set_main_option("sqlalchemy.url", settings.database_url)
+config.set_main_option("sqlalchemy.url", settings.database_url.replace("%", "%%"))
 
 # Interpret the config file for Python logging.
 # This line sets up loggers basically.
