@@ -1,4 +1,4 @@
-﻿from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from pydantic import BaseModel, ConfigDict
 from typing import Optional, List
@@ -17,6 +17,7 @@ class GalleryItemCreate(BaseModel):
     title: Optional[str] = None
     description: Optional[str] = None
     image_data: str          # base64 data URL or remote https:// URL
+    media_type: Optional[str] = "image"  # "image" or "video"
     is_featured: bool = False
     sort_order: int = 0
 
@@ -28,6 +29,7 @@ class GalleryBatchCreate(BaseModel):
 class GalleryItemUpdate(BaseModel):
     title: Optional[str] = None
     description: Optional[str] = None
+    media_type: Optional[str] = None
     is_featured: Optional[bool] = None
     sort_order: Optional[int] = None
 
@@ -37,6 +39,7 @@ class GalleryItemOut(BaseModel):
     title: Optional[str]
     description: Optional[str]
     image_data: str
+    media_type: Optional[str] = "image"
     uploaded_by: str
     uploader_name: Optional[str]
     is_featured: bool
@@ -63,11 +66,21 @@ def _item_to_dict(item: GalleryItem) -> dict:
     created_at_str = ""
     if item.created_at:
         created_at_str = item.created_at.isoformat() if hasattr(item.created_at, 'isoformat') else str(item.created_at)
+    
+    media_type = getattr(item, 'media_type', None)
+    if not media_type:
+        raw = (item.image_data or "").lower()
+        if "data:video" in raw or any(raw.endswith(ext) for ext in ['.mp4', '.mov', '.webm', '.avi', '.mkv', '.m4v']):
+            media_type = "video"
+        else:
+            media_type = "image"
+
     return {
         "id": str(item.id),
         "title": item.title,
         "description": item.description,
         "image_data": item.image_data,
+        "media_type": media_type,
         "uploaded_by": str(item.uploaded_by),
         "uploader_name": item.uploader_name or "Community Member",
         "is_featured": bool(item.is_featured),
@@ -141,11 +154,16 @@ def add_gallery_item(
         uploader_id = str(user.id)
         uploader_name = user.name or "Community Member"
 
+    m_type = payload.media_type
+    if not m_type:
+        m_type = "video" if "data:video" in payload.image_data else "image"
+
     item = GalleryItem(
         id=str(uuid.uuid4()),
         title=payload.title,
         description=payload.description,
         image_data=payload.image_data,
+        media_type=m_type,
         uploaded_by=uploader_id,
         uploader_name=uploader_name,
         is_featured=payload.is_featured,
@@ -184,11 +202,16 @@ def add_gallery_items_batch(
 
     created_items = []
     for p in payload.items:
+        m_type = p.media_type
+        if not m_type:
+            m_type = "video" if "data:video" in p.image_data else "image"
+
         item = GalleryItem(
             id=str(uuid.uuid4()),
             title=p.title,
             description=p.description,
             image_data=p.image_data,
+            media_type=m_type,
             uploaded_by=uploader_id,
             uploader_name=uploader_name,
             is_featured=p.is_featured,

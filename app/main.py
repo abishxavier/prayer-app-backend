@@ -59,6 +59,7 @@ def run_migrations():
                 "ALTER TABLE scheduled_calls ADD COLUMN IF NOT EXISTS chat_enabled BOOLEAN DEFAULT TRUE;",
                 "ALTER TABLE scheduled_calls ADD COLUMN IF NOT EXISTS screen_share_enabled BOOLEAN DEFAULT TRUE;",
                 "ALTER TABLE scheduled_calls ADD COLUMN IF NOT EXISTS ended_at TIMESTAMPTZ;",
+                "ALTER TABLE gallery_items ADD COLUMN IF NOT EXISTS media_type VARCHAR(32) DEFAULT 'image';",
             ]
             for stmt in migration_statements:
                 try:

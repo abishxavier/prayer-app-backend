@@ -17,3 +17,7 @@ venv/
 # IDE
 .vscode/
 .idea/
+
+# Large binaries / APK
+static/apk/
+*.apk

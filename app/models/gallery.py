@@ -14,6 +14,7 @@ class GalleryItem(Base):
     image_data = Column(Text, nullable=False)        # Base64 data URL or remote URL
     uploaded_by = Column(String, ForeignKey("users.id"), nullable=True)
     uploader_name = Column(String, nullable=True)   # Denormalized for speed
+    media_type = Column(String, default="image", nullable=True)     # "image" or "video"
     is_featured = Column(Boolean, default=False)    # Pin to top of gallery
     sort_order = Column(Integer, default=0)         # Manual ordering
     created_at = Column(DateTime(timezone=True), server_default=func.now(), default=lambda: datetime.now(timezone.utc))

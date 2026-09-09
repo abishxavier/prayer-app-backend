@@ -197,6 +197,139 @@ def get_scheduled_calls(db: Session = Depends(get_db), current_user: dict = Depe
     return result
 
 
+@router.post("/calls/{room_name}/ring")
+def ring_meeting_call(
+    room_name: str,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    Broadcasts a high-priority incoming video call ring notification to all community members
+    for the specified room. Caller device is excluded to prevent ringing the host.
+    """
+    user_id = current_user.get("sub") or current_user.get("id")
+    caller = db.query(User).filter(User.id == user_id).first() if user_id else None
+    caller_name = caller.name if caller else "Prayer Leader"
+    caller_token = caller.device_token if caller else None
+
+    # Locate the scheduled call if any
+    scheduled = db.query(ScheduledCall).filter(ScheduledCall.room_name == room_name).first()
+    topic = scheduled.topic if (scheduled and scheduled.topic) else "Prayer Meeting"
+    call_type = scheduled.call_type if (scheduled and scheduled.call_type) else "Prayer Meeting"
+    host_id = scheduled.host_id if scheduled else user_id
+
+    # Fetch all other active users with device tokens
+    query = db.query(User.device_token).filter(
+        User.device_token.isnot(None),
+        User.device_token != "",
+    )
+    if user_id:
+        query = query.filter(User.id != user_id)
+    
+    user_tokens = query.all()
+    tokens_to_notify = [t[0] for t in user_tokens if t[0] and t[0] != caller_token]
+    unique_tokens = list(set(tokens_to_notify))
+
+    fcm_data = {
+        "type": "video_call",
+        "notification_type": "video_call",
+        "is_ringing": "true",
+        "room_name": str(room_name),
+        "topic": str(topic),
+        "host_name": str(caller_name),
+        "host_user_id": str(host_id or ""),
+        "call_type": str(call_type),
+    }
+
+    notif_title = f"{topic}"
+    notif_body = f"Host: {caller_name} • Tap to Join"
+
+    sent_count = 0
+    for tok in unique_tokens:
+        try:
+            if send_push_notification(
+                token=tok,
+                title=notif_title,
+                body=notif_body,
+                data=fcm_data,
+            ):
+                sent_count += 1
+        except Exception as e:
+            print(f"Error sending ring to token {tok[:12]}...: {e}")
+
+    return {
+        "status": "ok",
+        "room_name": room_name,
+        "sent_count": sent_count,
+        "total_targets": len(unique_tokens),
+    }
+
+
+@router.post("/calls/{room_name}/end")
+def end_meeting_call(
+    room_name: str,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    Ends the call, marks status='ended', and broadcasts meeting_ended FCM to silence and dismiss
+    incoming call ringing across all phones.
+    """
+    now_utc = datetime.now(timezone.utc)
+
+    # 1. Update in-memory ended set
+    _ended_meeting_rooms.add(room_name)
+
+    # 2. Update DB
+    scheduled = db.query(ScheduledCall).filter(ScheduledCall.room_name == room_name).first()
+    if scheduled:
+        scheduled.status = "ended"
+        scheduled.ended_at = now_utc
+        db.commit()
+
+    # 3. Broadcast meeting_ended to all devices to dismiss ringers
+    user_tokens = db.query(User.device_token).filter(
+        User.device_token.isnot(None),
+        User.device_token != "",
+    ).all()
+    unique_tokens = list(set([t[0] for t in user_tokens if t[0]]))
+
+    fcm_data = {
+        "type": "meeting_ended",
+        "notification_type": "meeting_ended",
+        "room_name": str(room_name),
+    }
+
+    for tok in unique_tokens:
+        try:
+            send_push_notification(
+                token=tok,
+                title="Meeting Ended",
+                body="The meeting has ended.",
+                data=fcm_data,
+            )
+        except Exception:
+            pass
+
+    return {"status": "ok", "message": "Meeting ended successfully"}
+
+
+@router.delete("/calls/scheduled/{room_or_id}")
+def delete_scheduled_call(
+    room_or_id: str,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    """Delete scheduled call by id or room_name."""
+    call = db.query(ScheduledCall).filter(
+        (ScheduledCall.id == room_or_id) | (ScheduledCall.room_name == room_or_id)
+    ).first()
+    if call:
+        db.delete(call)
+        db.commit()
+    return {"status": "ok", "message": "Scheduled call deleted successfully"}
+
+
 from app.models.call import CallLog
 from app.schemas.call import CallLogCreate, CallLogOut
 from sqlalchemy import or_

@@ -1,7 +1,7 @@
 import os
 import json
 from fastapi import APIRouter, Request, HTTPException
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 
 router = APIRouter(prefix="/api/app", tags=["App Update"])
 
@@ -62,7 +62,12 @@ def download_latest_apk():
     """
     Directly serves the latest Android APK for Over-The-Air app update installation.
     Looks for prayer_app.apk or app-release.apk in static/apk/.
+    If an external download URL is configured, redirects directly to it.
     """
+    config = _load_version_config()
+    external_url = config.get("download_url", "")
+    if external_url and external_url.startswith("http"):
+        return RedirectResponse(url=external_url, status_code=302)
     candidates = [
         os.path.join(STATIC_APK_DIR, "prayer_app.apk"),
         os.path.join(STATIC_APK_DIR, "app-release.apk"),

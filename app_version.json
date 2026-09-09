@@ -1,7 +1,7 @@
 {
-  "latest_version": "1.0.0",
-  "build_number": 1,
-  "release_notes": "Initial release with live prayer audio meetings, rosary, daily reflections, and auto-update support.",
-  "download_url": "/api/app/download",
+  "latest_version": "1.1.0",
+  "build_number": 2,
+  "release_notes": "What's New in v1.1.0\n\n- Gallery Video Support: Upload and play videos in Community Gallery\n- Video player with full-screen controls, play/pause, scrub bar\n- Call Ring Notifications restored on all Android phones\n- Call Scheduling password now asked only once (bug fixed)\n- Authentic Catholic Tamil Bible (73 books) preserved\n- Bug fixes and performance improvements",
+  "download_url": "https://github.com/abishxavier/prayer-app-backend/releases/download/v1.1.0/prayer_app.apk",
   "force_update": false
 }
