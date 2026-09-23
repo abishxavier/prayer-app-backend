@@ -2,6 +2,6 @@
   "latest_version": "1.1.2",
   "build_number": 4,
   "release_notes": "What's New in v1.1.2\n\n- Video Call Camera Controls: Host can now turn on/re-enable cameras for individual participants.\n- Turn Off / Turn On All Cameras: Common one-tap batch camera control for all meeting participants.\n- In-Call Volume Controls: Built-in volume control dialog with real-time volume slider (up to 200% boost) & +/- buttons.\n- Hardware Volume Buttons: Fixed physical volume up/down buttons during active video and audio calls.\n- Host Early Ringing: 30-second persistent ringing notification for the host when participants join early.\n- Scheduled Call Details & UI fixes: Smoother navigation and enhanced privacy.\n- Performance improvements and bug fixes across video and audio streaming.",
-  "download_url": "/api/app/download",
+  "download_url": "https://github.com/abishxavier/prayer-app-backend/releases/download/v1.1.2/prayer_app.apk",
   "force_update": false
 }
