@@ -92,6 +92,14 @@ async def lifespan(fastapi_app):
             run_migrations()
         except Exception as e:
             print(f"Startup migrations note (non-fatal): {e}", flush=True)
+        try:
+            with engine.connect().execution_options(isolation_level="AUTOCOMMIT") as conn:
+                tables = conn.execute(text("SELECT tablename FROM pg_tables WHERE schemaname = 'public';")).fetchall()
+                for (tbl,) in tables:
+                    conn.execute(text(f'ALTER TABLE "{tbl}" ENABLE ROW LEVEL SECURITY;'))
+                print(f"PostgreSQL RLS successfully verified and enabled on all {len(tables)} public tables!", flush=True)
+        except Exception as rls_err:
+            print(f"RLS auto-enforce note (non-fatal): {rls_err}", flush=True)
 
     asyncio.create_task(asyncio.to_thread(_init_db_in_background))
     # Start background auto-ringer task

@@ -1,7 +1,7 @@
 {
-  "latest_version": "1.1.1",
-  "build_number": 3,
-  "release_notes": "What's New in v1.1.1\n\n- In-App Mobile Number Linking: Easily link your phone number to receive call rings & meeting invites\n- Home Screen & Profile quick-action prompt banners\n- Community Gallery Video Support: Upload and play videos with full controls\n- Call Ring Notifications restored on all Android phones\n- Call Scheduling password bug fixed\n- Authentic Catholic Tamil Bible (73 books) preserved\n- Bug fixes and performance improvements",
-  "download_url": "https://github.com/abishxavier/prayer-app-backend/releases/download/v1.1.1/prayer_app.apk",
+  "latest_version": "1.1.2",
+  "build_number": 4,
+  "release_notes": "What's New in v1.1.2\n\n- Video Call Camera Controls: Host can now turn on/re-enable cameras for individual participants.\n- Turn Off / Turn On All Cameras: Common one-tap batch camera control for all meeting participants.\n- In-Call Volume Controls: Built-in volume control dialog with real-time volume slider (up to 200% boost) & +/- buttons.\n- Hardware Volume Buttons: Fixed physical volume up/down buttons during active video and audio calls.\n- Host Early Ringing: 30-second persistent ringing notification for the host when participants join early.\n- Scheduled Call Details & UI fixes: Smoother navigation and enhanced privacy.\n- Performance improvements and bug fixes across video and audio streaming.",
+  "download_url": "/api/app/download",
   "force_update": false
 }

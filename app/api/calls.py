@@ -265,69 +265,79 @@ def ring_meeting_call(
     }
 
 
-@router.post("/calls/{room_name}/end")
-def end_meeting_call(
+@router.post("/calls/{room_name}/notify-host-waiting")
+def notify_host_waiting(
     room_name: str,
     db: Session = Depends(get_db),
     current_user: dict = Depends(get_current_user)
 ):
     """
-    Ends the call, marks status='ended', and broadcasts meeting_ended FCM to silence and dismiss
-    incoming call ringing across all phones.
+    Called when a participant joins or waits in a scheduled call before the host has started it.
+    Sends a high-priority 30-second ring notification specifically to the meeting HOST's device.
     """
-    now_utc = datetime.now(timezone.utc)
+    user_id = current_user.get("sub") or current_user.get("id")
+    participant = db.query(User).filter(User.id == user_id).first() if user_id else None
+    participant_name = participant.name if participant and participant.name else "A participant"
 
-    # 1. Update in-memory ended set
-    _ended_meeting_rooms.add(room_name)
-
-    # 2. Update DB
     scheduled = db.query(ScheduledCall).filter(ScheduledCall.room_name == room_name).first()
-    if scheduled:
-        scheduled.status = "ended"
-        scheduled.ended_at = now_utc
-        db.commit()
+    if not scheduled:
+        raise HTTPException(status_code=404, detail="Meeting not found")
 
-    # 3. Broadcast meeting_ended to all devices to dismiss ringers
-    user_tokens = db.query(User.device_token).filter(
-        User.device_token.isnot(None),
-        User.device_token != "",
-    ).all()
-    unique_tokens = list(set([t[0] for t in user_tokens if t[0]]))
+    host_id = scheduled.host_id
+    if not host_id:
+        return {"status": "skipped", "reason": "No host assigned to this call"}
+
+    # If the user joining IS the host, do not ring self
+    if str(user_id) == str(host_id):
+        return {"status": "skipped", "reason": "User is the host"}
+
+    # Check if host is already active in the call room
+    room_dict = _live_call_participants.get(room_name, {})
+    now = datetime.now(timezone.utc)
+    for uid, p in room_dict.items():
+        if str(p.get("user_id")) == str(host_id) and (now - p["last_seen"]).total_seconds() < 120:
+            return {"status": "skipped", "reason": "Host is already inside the call room"}
+
+    host_user = db.query(User).filter(User.id == host_id).first()
+    if not host_user or not host_user.device_token:
+        return {"status": "skipped", "reason": "Host has no device token registered"}
+
+    topic = scheduled.topic or "Prayer Meeting"
+    call_type = scheduled.call_type or "Prayer Meeting"
 
     fcm_data = {
-        "type": "meeting_ended",
-        "notification_type": "meeting_ended",
+        "type": "video_call",
+        "notification_type": "video_call",
+        "is_ringing": "true",
+        "is_host_alert": "true",
+        "duration": "30",
         "room_name": str(room_name),
+        "topic": str(topic),
+        "host_name": str(host_user.name or "Host"),
+        "host_user_id": str(host_id),
+        "participant_name": str(participant_name),
+        "call_type": str(call_type),
+        "scheduled_at": scheduled.scheduled_at.isoformat() if scheduled.scheduled_at else "",
     }
 
-    for tok in unique_tokens:
-        try:
-            send_push_notification(
-                token=tok,
-                title="Meeting Ended",
-                body="The meeting has ended.",
-                data=fcm_data,
-            )
-        except Exception:
-            pass
+    notif_title = "📞 Participant Waiting in Call!"
+    notif_body = f'{participant_name} has joined "{topic}". Please join to start the meeting.'
 
-    return {"status": "ok", "message": "Meeting ended successfully"}
+    sent = send_push_notification(
+        token=host_user.device_token,
+        title=notif_title,
+        body=notif_body,
+        data=fcm_data,
+    )
+
+    return {
+        "status": "ok",
+        "host_notified": sent,
+        "host_name": host_user.name,
+        "participant_name": participant_name,
+    }
 
 
-@router.delete("/calls/scheduled/{room_or_id}")
-def delete_scheduled_call(
-    room_or_id: str,
-    db: Session = Depends(get_db),
-    current_user: dict = Depends(get_current_user)
-):
-    """Delete scheduled call by id or room_name."""
-    call = db.query(ScheduledCall).filter(
-        (ScheduledCall.id == room_or_id) | (ScheduledCall.room_name == room_or_id)
-    ).first()
-    if call:
-        db.delete(call)
-        db.commit()
-    return {"status": "ok", "message": "Scheduled call deleted successfully"}
 
 
 from app.models.call import CallLog
@@ -607,53 +617,6 @@ def update_meeting_intention(
     raise HTTPException(status_code=404, detail="Intention not found")
 
 
-@router.post("/calls/{room_name}/ring")
-def ring_meeting_call(
-    room_name: str,
-    db: Session = Depends(get_db),
-    current_user: dict = Depends(get_current_user)
-):
-    user_id = current_user["sub"]
-    user = db.query(User).filter(User.id == user_id).first()
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
-
-    call = db.query(ScheduledCall).filter(ScheduledCall.room_name == room_name).first()
-    topic = call.topic if call else "Prayer Meeting"
-    call_type = call.call_type if call else "Video Call"
-
-    tokens_to_notify = []
-    # Community-wide ring — notify all users except the host
-    target_users = db.query(User).filter(
-        User.id != user_id,
-        User.device_token.isnot(None),
-        User.device_token != ""
-    ).all()
-    for u in target_users:
-        if u.device_token:
-            tokens_to_notify.append(u.device_token)
-
-    notif_title = f"{topic}"
-    notif_body = f"Host: {user.name or 'Host'} • Tap to Join"
-    fcm_data = {
-        "type": "video_call",
-        "notification_type": "video_call",
-        "is_ringing": "true",
-        "room_name": room_name,
-        "topic": topic,
-        "host_name": user.name or "Host",
-        "call_type": call_type,
-    }
-
-    sent_count = 0
-    for tok in set(tokens_to_notify):
-        try:
-            if send_push_notification(token=tok, title=notif_title, body=notif_body, data=fcm_data):
-                sent_count += 1
-        except Exception as e:
-            print(f"Error ringing video call: {e}")
-
-    return {"status": "ok", "notified_count": sent_count}
 
 
 @router.post("/calls/{room_name}/missed")
