@@ -1,0 +1,7 @@
+{
+  "latest_version": "1.1.3",
+  "build_number": 5,
+  "release_notes": "What's New in v1.1.3\n\n- Fixed Video Rendering: Resolved issue where video was not showing for participants and local camera on mobile & web.\n- Fixed Screen Sharing Audio: Screen share video audio now stays connected and broadcasting even when the presenter's microphone is muted.\n- Fixed Ringing Ignore Button: One-tap instant dismissal and missed call logging when declining incoming calls.\n- Fixed Side Call Cut Button: Instant, clean hangup from floating Pop Player PiP widget and hardware buttons.\n- Performance, audio clarity & stability improvements across video meetings.",
+  "download_url": "https://github.com/abishxavier/prayer-app-backend/releases/download/v1.1.3/prayer_app.apk",
+  "force_update": false
+}
