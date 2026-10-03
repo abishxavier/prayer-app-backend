@@ -327,7 +327,8 @@ def refresh(payload: RefreshRequest, db: Session = Depends(get_db)):
     old = db.query(RefreshToken).filter(RefreshToken.token == token).first()
     if not old or old.revoked:
         raise HTTPException(status_code=401, detail="Invalid refresh token")
-    if old.expires_at < datetime.now(timezone.utc):
+    old_expires = old.expires_at.replace(tzinfo=timezone.utc) if old.expires_at.tzinfo is None else old.expires_at
+    if old_expires < datetime.now(timezone.utc):
         raise HTTPException(status_code=401, detail="Refresh token expired")
 
     # Enforce device binding: require device_id match if provided

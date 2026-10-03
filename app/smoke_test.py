@@ -30,7 +30,8 @@ def run_smoke_test():
         access_token = create_access_token({"sub": user.id})
         rt_value = secrets.token_urlsafe(48)
         expires = datetime.now(timezone.utc) + timedelta(days=30)
-        refresh = RefreshToken(user_id=user.id, token=rt_value, expires_at=expires)
+        device_id = f"smoke-device-{secrets.token_hex(4)}"
+        refresh = RefreshToken(user_id=user.id, token=rt_value, device_id=device_id, expires_at=expires)
         db.add(refresh)
         db.commit()
         print("Inserted refresh token")
@@ -41,7 +42,7 @@ def run_smoke_test():
         print("GET /auth/me ->", resp.status_code, resp.json())
 
         # Call /auth/refresh
-        resp = client.post("/auth/refresh", json={"refresh_token": rt_value})
+        resp = client.post("/auth/refresh", json={"refresh_token": rt_value, "device_id": device_id})
         print("POST /auth/refresh ->", resp.status_code, resp.json())
 
         # Call /auth/logout
@@ -54,9 +55,8 @@ def run_smoke_test():
     finally:
         # Cleanup
         try:
-            if rt_value:
-                db.query(RefreshToken).filter(RefreshToken.token == rt_value).delete()
             if user:
+                db.query(RefreshToken).filter(RefreshToken.user_id == user.id).delete()
                 db.query(User).filter(User.id == user.id).delete()
             db.commit()
         except Exception:

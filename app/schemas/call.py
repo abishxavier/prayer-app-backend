@@ -1,4 +1,4 @@
-﻿from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict
 from datetime import datetime
 from typing import Optional
 
@@ -28,7 +28,7 @@ class InstantMeetingCreate(BaseModel):
 
 class ScheduledCallOut(BaseModel):
     id: str
-    topic: str
+    topic: Optional[str] = "Prayer Meeting"
     description: Optional[str] = None
     call_type: Optional[str] = "Prayer Meeting"
     room_name: str
@@ -39,10 +39,10 @@ class ScheduledCallOut(BaseModel):
     chat_enabled: Optional[bool] = True
     screen_share_enabled: Optional[bool] = True
     has_password: Optional[bool] = False
-    host_id: str
+    host_id: Optional[str] = ""
     host_name: Optional[str] = None
     scheduled_at: datetime
-    created_at: datetime
+    created_at: Optional[datetime] = None
     active_participants_count: Optional[int] = 0
     total_joined_count: Optional[int] = 0
     left_count: Optional[int] = 0

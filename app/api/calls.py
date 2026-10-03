@@ -137,12 +137,32 @@ _waiting_room_participants: dict[str, dict[str, dict]] = {}
 
 @router.get("/calls/scheduled", response_model=List[ScheduledCallOut])
 def get_scheduled_calls(db: Session = Depends(get_db), current_user: dict = Depends(get_current_user)):
-    calls = db.query(ScheduledCall).order_by(ScheduledCall.created_at.desc(), ScheduledCall.scheduled_at.desc()).all()
     now = datetime.now(timezone.utc)
+    two_weeks_ago = now - timedelta(days=14)
+
+    # 1. Automatically purge meetings older than 2 weeks (14 days)
+    try:
+        old_calls = db.query(ScheduledCall).filter(
+            (ScheduledCall.scheduled_at < two_weeks_ago) |
+            (ScheduledCall.ended_at.isnot(None) & (ScheduledCall.ended_at < two_weeks_ago))
+        ).all()
+        for oc in old_calls:
+            _ended_meeting_rooms.discard(oc.room_name)
+            _live_call_participants.pop(oc.room_name, None)
+            db.delete(oc)
+        if old_calls:
+            db.commit()
+    except Exception as e:
+        db.rollback()
+        print(f"Note on auto-purging old meetings: {e}")
+
+    calls = db.query(ScheduledCall).filter(
+        ScheduledCall.scheduled_at >= two_weeks_ago
+    ).all()
     
     result = []
     for call in calls:
-        host = db.query(User).filter(User.id == call.host_id).first()
+        host = db.query(User).filter(User.id == call.host_id).first() if call.host_id else None
         room = call.room_name or ""
         
         # Clean stale participants
@@ -156,7 +176,7 @@ def get_scheduled_calls(db: Session = Depends(get_db), current_user: dict = Depe
         total_joined = max(stats.get("total_joined", 0), active_count)
         left_count = max(0, total_joined - active_count)
 
-        scheduled_utc = call.scheduled_at
+        scheduled_utc = call.scheduled_at or now
         if scheduled_utc.tzinfo is None:
             scheduled_utc = scheduled_utc.replace(tzinfo=timezone.utc)
             
@@ -181,10 +201,10 @@ def get_scheduled_calls(db: Session = Depends(get_db), current_user: dict = Depe
             chat_enabled=call.chat_enabled if call.chat_enabled is not None else True,
             screen_share_enabled=call.screen_share_enabled if call.screen_share_enabled is not None else True,
             has_password=bool(call.password_hash),
-            host_id=call.host_id,
+            host_id=call.host_id or "",
             host_name=host.name if host else "Unknown",
-            scheduled_at=call.scheduled_at,
-            created_at=call.created_at,
+            scheduled_at=call.scheduled_at or now,
+            created_at=call.created_at or call.scheduled_at or now,
             active_participants_count=active_count,
             total_joined_count=total_joined,
             left_count=left_count,
@@ -194,6 +214,13 @@ def get_scheduled_calls(db: Session = Depends(get_db), current_user: dict = Depe
             minutes_until=minutes_until
         ))
         
+    # Sort: active / upcoming first (ascending scheduled_at), finished/ended below (descending scheduled_at)
+    def call_sort_key(item: ScheduledCallOut):
+        is_finished = (item.status == "ended") or bool(item.is_expired)
+        ts = item.scheduled_at.timestamp() if item.scheduled_at else 0
+        return (1 if is_finished else 0, -ts if is_finished else ts)
+
+    result.sort(key=call_sort_key)
     return result
 
 
@@ -670,7 +697,8 @@ def end_meeting(
     current_user: dict = Depends(get_current_user)
 ):
     """Manually end a live meeting/scheduled call for all participants."""
-    # 1. Track in-memory as ended
+    # 1. Track in-memory as ended and check if already ended (dedup pushes)
+    is_already_ended = room_name in _ended_meeting_rooms
     _ended_meeting_rooms.add(room_name)
 
     # 2. Clear in-memory live participant pool
@@ -683,9 +711,10 @@ def end_meeting(
     ).first()
     
     if call:
+        call.status = "ended"
+        call.ended_at = datetime.now(timezone.utc)
         call.is_rung = True
-        # Set scheduled_at to past so it registers as ended
-        call.scheduled_at = datetime.now(timezone.utc) - timedelta(hours=2)
+        # CRITICAL FIX: Keep original scheduled_at time intact — DO NOT alter scheduled_at!
         db.commit()
 
     # 4. Mark linked MonthlyPlan as completed if any
@@ -700,25 +729,26 @@ def end_meeting(
     except Exception as e:
         print(f"Note on marking linked plan complete: {e}")
 
-    # 5. Broadcast FCM meeting_ended to dismiss ringing dialogs on all user devices
-    try:
-        user_id = current_user["sub"]
-        all_users = db.query(User).filter(User.id != user_id, User.device_token.isnot(None), User.device_token != "").all()
-        end_fcm_data = {
-            "type": "meeting_ended",
-            "notification_type": "meeting_ended",
-            "room_name": str(room_name),
-        }
-        for u in all_users:
-            if u.device_token:
-                send_push_notification(
-                    token=u.device_token,
-                    title="Meeting Ended",
-                    body="The host has ended this prayer meeting.",
-                    data=end_fcm_data,
-                )
-    except Exception as e:
-        print(f"Error broadcasting meeting_ended push: {e}")
+    # 5. Broadcast FCM meeting_ended ONLY ONCE (skip if already ended to avoid duplicate notifications)
+    if not is_already_ended:
+        try:
+            user_id = current_user["sub"]
+            all_users = db.query(User).filter(User.id != user_id, User.device_token.isnot(None), User.device_token != "").all()
+            end_fcm_data = {
+                "type": "meeting_ended",
+                "notification_type": "meeting_ended",
+                "room_name": str(room_name),
+            }
+            for u in all_users:
+                if u.device_token:
+                    send_push_notification(
+                        token=u.device_token,
+                        title="Meeting Ended",
+                        body="The host has ended this prayer meeting.",
+                        data=end_fcm_data,
+                    )
+        except Exception as e:
+            print(f"Error broadcasting meeting_ended push: {e}")
 
     return {"status": "ok", "message": f"Meeting {room_name} ended successfully"}
 

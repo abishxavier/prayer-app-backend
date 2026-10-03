@@ -48,13 +48,20 @@ def get_app_version(request: Request):
             base_url = "https://" + base_url[7:]
         download_url = f"{base_url}{download_url}"
 
-    return {
-        "latest_version": config.get("latest_version", "1.0.0"),
-        "build_number": int(config.get("build_number", 1)),
-        "release_notes": config.get("release_notes", "Bug fixes and improvements."),
-        "download_url": download_url,
-        "force_update": bool(config.get("force_update", False))
-    }
+    return JSONResponse(
+        content={
+            "latest_version": config.get("latest_version", "1.0.0"),
+            "build_number": int(config.get("build_number", 1)),
+            "release_notes": config.get("release_notes", "Bug fixes and improvements."),
+            "download_url": download_url,
+            "force_update": bool(config.get("force_update", False))
+        },
+        headers={
+            "Cache-Control": "no-cache, no-store, must-revalidate, max-age=0",
+            "Pragma": "no-cache",
+            "Expires": "0"
+        }
+    )
 
 
 @router.get("/download")

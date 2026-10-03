@@ -118,6 +118,15 @@ def _mark_call_as_rung(call_id: str):
 
 
 def _execute_ring(call: Dict[str, Any]):
+    """
+    Sends the 30-second ring FCM notification for a due scheduled call.
+
+    Key rules:
+    - The HOST must be included (with is_host_alert='true') so their phone rings too.
+      Previously the host was excluded, so they never received the scheduled ring — BUG FIXED.
+    - Users already active in the call room are skipped (they have joined early; no need to ring).
+    - Duplicate tokens (same device registered twice) are deduplicated before sending.
+    """
     db = SessionLocal()
     try:
         call_id = call["id"]
@@ -125,36 +134,50 @@ def _execute_ring(call: Dict[str, Any]):
         if not db_call or db_call.is_rung:
             return
 
-        # Fetch host name without loading large binary/image blobs
+        # Fetch host info (name + token) without loading heavy profile_image blobs
         host_id = call.get("host_id")
         host_name = "Prayer Leader"
-        host_token = None
         if host_id:
             host_row = db.query(User.name, User.device_token).filter(User.id == host_id).first()
             if host_row:
                 host_name = host_row[0] or "Prayer Leader"
-                host_token = host_row[1]
 
         topic = call.get("topic", "Prayer Meeting")
         room_name = call.get("room_name", "prayer_call_room")
         call_type = call.get("call_type", "Prayer Meeting")
         scheduled_at_iso = call["scheduled_at"].isoformat() if call.get("scheduled_at") else ""
 
-        # Fetch ONLY user tokens (no heavy profile_image strings) to minimize database egress
-        user_tokens = (
-            db.query(User.device_token)
+        # ── Determine who has already joined the call room ──────────────────────
+        # Pull from the in-memory _live_call_participants store in the calls API module.
+        # Anyone already inside the room (last_seen < 2 min ago) is skipped — no need to ring them.
+        already_joined_user_ids: set = set()
+        try:
+            from app.api.calls import _live_call_participants
+            from datetime import datetime as _dt, timezone as _tz
+            now_check = _dt.now(_tz.utc)
+            room_dict = _live_call_participants.get(room_name, {})
+            for _uid, p in list(room_dict.items()):
+                if (now_check - p.get("last_seen", now_check)).total_seconds() < 120:
+                    already_joined_user_ids.add(str(p.get("user_id", "")))
+        except Exception as e:
+            logger.warning(f"Could not check live participants (non-fatal): {e}")
+
+        # ── Fetch ALL users with device tokens — INCLUDING the host ──────────────
+        # The host was previously excluded here, causing them to never get the ring.
+        all_users = (
+            db.query(User.id, User.device_token)
             .filter(
                 User.device_token.isnot(None),
                 User.device_token != "",
-                User.id != host_id,
             )
             .all()
         )
 
-        tokens_to_notify = [t[0] for t in user_tokens if t[0] and t[0] != host_token]
-        unique_tokens = list(set(tokens_to_notify))
+        notif_title = f"{topic}"
+        notif_body = f"Host: {host_name} • Tap to Join"
 
-        fcm_data = {
+        # Base FCM data payload (same for all recipients except is_host_alert)
+        base_fcm_data = {
             "type": "video_call",
             "notification_type": "video_call",
             "is_ringing": "true",
@@ -166,27 +189,54 @@ def _execute_ring(call: Dict[str, Any]):
             "scheduled_at": scheduled_at_iso,
         }
 
-        notif_title = f"{topic}"
-        notif_body = f"Host: {host_name} • Tap to Join"
-
-        logger.info(f"🔔 [Auto-Ringer] Auto-ringing {len(unique_tokens)} device(s) for '{topic}'...")
+        logger.info(
+            f"🔔 [Auto-Ringer] Ringing '{topic}' | "
+            f"total_users={len(all_users)}, already_in_call={len(already_joined_user_ids)}"
+        )
         sent_count = 0
-        for tok in unique_tokens:
+        skipped_joined = 0
+        seen_tokens: set = set()
+
+        for user_row in all_users:
+            user_row_id = str(user_row[0])
+            token = user_row[1]
+            if not token or token in seen_tokens:
+                continue
+            seen_tokens.add(token)
+
+            # Skip users who are already active inside the call room
+            if user_row_id in already_joined_user_ids:
+                skipped_joined += 1
+                continue
+
+            is_host = user_row_id == str(host_id or "")
+
+            # Build per-recipient FCM data
+            fcm_data = dict(base_fcm_data)
+            if is_host:
+                # Mark as host_alert so the flutter smart-ringing "suppress if host" logic
+                # is bypassed for THIS notification. That suppression is intended for
+                # manual participant rings — not for the host's own scheduled call ring.
+                fcm_data["is_host_alert"] = "true"
+
             try:
                 if send_push_notification(
-                    token=tok,
+                    token=token,
                     title=notif_title,
                     body=notif_body,
                     data=fcm_data,
                 ):
                     sent_count += 1
             except Exception as err:
-                logger.error(f"Error ringing token {tok[:15]}...: {err}")
+                logger.error(f"Error ringing token {token[:15]}...: {err}")
 
-        # Mark as rung
+        # Mark as rung so it won't fire again
         db_call.is_rung = True
         db.commit()
-        logger.info(f"✅ [Auto-Ringer] Successfully rang {sent_count}/{len(unique_tokens)} devices for '{topic}'.")
+        logger.info(
+            f"✅ [Auto-Ringer] Rang {sent_count} device(s) for '{topic}' "
+            f"(skipped {skipped_joined} already-in-call)."
+        )
     except Exception as e:
         logger.error(f"Error executing ring for call {call.get('id')}: {e}")
     finally:
