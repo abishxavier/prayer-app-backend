@@ -530,20 +530,29 @@ def search_user_by_phone(phone: str, db: Session = Depends(get_db), current_user
 @router.get("/auth/users/all")
 def get_all_users(
     db: Session = Depends(get_db),
-    current_user: dict = Depends(get_current_user),
+    current_user: Optional[dict] = Depends(get_optional_current_user),
 ):
     """
-    Returns a lightweight list of all registered users (excluding the current caller).
+    Returns a lightweight list of all registered users (excluding the current caller and test accounts).
     Used for the call invitation picker in the Flutter app.
-    Response: list of { id, name, profile_image }
+    Response: list of { id, name, profile_image, phone }
     """
-    caller_id = current_user.get("sub")
-    users = db.query(User).filter(User.id != caller_id).order_by(User.name).all()
+    caller_id = current_user.get("sub") if current_user else None
+    query = db.query(User).filter(
+        User.name.isnot(None),
+        User.name != "",
+        ~User.name.ilike("%smoke%"),
+        ~User.name.ilike("%integration tester%"),
+    )
+    if caller_id:
+        query = query.filter(User.id != caller_id)
+    users = query.order_by(User.name).all()
     return [
         {
             "id": u.id,
-            "name": u.name or "Unknown",
+            "name": u.name or "Community Member",
             "profile_image": u.profile_image,
+            "phone": u.phone,
         }
         for u in users
     ]
