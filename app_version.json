@@ -1,7 +1,7 @@
 {
-  "latest_version": "1.1.5",
-  "build_number": 7,
-  "release_notes": "What's New in v1.1.5\n\n- Selective Video Call Scheduling: Choose specific members by registration name to receive call rings, or choose 'Select All' to invite everyone.\n- Selective Ringing: Call ring notifications are sent only to the invited members instead of ringing all phones.\n- Real-time Member Search: Search members instantly by name or phone in the call scheduler.\n- General stability, audio clarity, and performance improvements across live prayer meetings.",
-  "download_url": "https://github.com/abishxavier/prayer-app-backend/releases/download/v1.1.5/prayer_app.apk",
+  "latest_version": "1.1.6",
+  "build_number": 8,
+  "release_notes": "What's New in v1.1.6\n\n- Instant Community Members Loading: Fixed contact loading when scheduling a video call with instant offline caching and retry support.\n- Selective Video Call Scheduling: Choose specific members by registration name to receive call rings, or choose 'Select All' to invite everyone.\n- Selective Ringing: Call ring notifications are sent only to the invited members instead of ringing all phones.\n- Real-time Member Search: Search members instantly by name or phone in the call scheduler.\n- General stability, audio clarity, and performance improvements across live prayer meetings.",
+  "download_url": "https://github.com/abishxavier/prayer-app-backend/releases/download/v1.1.6/prayer_app.apk",
   "force_update": false
 }
