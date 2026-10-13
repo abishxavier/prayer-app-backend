@@ -527,6 +527,28 @@ def search_user_by_phone(phone: str, db: Session = Depends(get_db), current_user
     raise HTTPException(status_code=404, detail="User with this phone number not found")
 
 
+@router.get("/auth/users/all")
+def get_all_users(
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """
+    Returns a lightweight list of all registered users (excluding the current caller).
+    Used for the call invitation picker in the Flutter app.
+    Response: list of { id, name, profile_image }
+    """
+    caller_id = current_user.get("sub")
+    users = db.query(User).filter(User.id != caller_id).order_by(User.name).all()
+    return [
+        {
+            "id": u.id,
+            "name": u.name or "Unknown",
+            "profile_image": u.profile_image,
+        }
+        for u in users
+    ]
+
+
 @router.post("/auth/users/match-phones")
 def match_phones(
     payload: dict,

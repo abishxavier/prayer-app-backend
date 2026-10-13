@@ -1,7 +1,7 @@
 {
-  "latest_version": "1.1.4",
-  "build_number": 6,
-  "release_notes": "What's New in v1.1.4\n\n- Fixed Camera Toggle & Video Rendering: Turning camera off and on immediately streams and updates video feed to all participants.\n- Fixed Duplicate Ending Notifications: Rapid double/triple taps on End Meeting send strictly one notification and prevent history clutter.\n- Fixed Scheduled Call Time: Preserved authentic meeting time (resolved 4:46 PM overwrite bug).\n- Direct Update Download: Any older version directly upgrades to the newest release without downloading intermediate versions one-by-one.\n- Automatic 14-Day Purge & Meeting Priority: Upcoming calls always appear first; calls older than 2 weeks are automatically removed.\n- General stability, audio clarity, and performance improvements across live prayer meetings.",
-  "download_url": "https://github.com/abishxavier/prayer-app-backend/releases/download/v1.1.4/prayer_app.apk",
+  "latest_version": "1.1.5",
+  "build_number": 7,
+  "release_notes": "What's New in v1.1.5\n\n- Selective Video Call Scheduling: You can now pick specific participants by registration name to receive call rings, or choose 'Select All' to invite everyone.\n- Selective Ringing: Video call ring notifications are sent only to the selected invitees instead of ringing for all members.\n- Real-time Contact Search: Filter members instantly by name or phone in the call scheduler.\n- General stability, audio clarity, and performance improvements across live prayer meetings.",
+  "download_url": "/api/app/download",
   "force_update": false
 }

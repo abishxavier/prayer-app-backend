@@ -21,6 +21,18 @@ class TestScheduledCallBackend(unittest.TestCase):
         self.assertEqual(call_out.id, "test_call_123")
         self.assertIsNone(call_out.host_id)
         self.assertIsNone(call_out.created_at)
+        self.assertIsNone(call_out.invited_user_ids)
+
+    def test_scheduled_call_with_invited_user_ids(self):
+        """Verifies invited_user_ids is correctly preserved in ScheduledCallOut."""
+        payload = {
+            "id": "test_call_selective",
+            "room_name": "room_test_selective",
+            "scheduled_at": datetime.now(timezone.utc),
+            "invited_user_ids": ["user_1", "user_2"],
+        }
+        call_out = ScheduledCallOut(**payload)
+        self.assertEqual(call_out.invited_user_ids, ["user_1", "user_2"])
 
     def test_scheduled_call_two_week_purge_logic(self):
         """Verifies that backend filtering eliminates calls older than 14 days."""

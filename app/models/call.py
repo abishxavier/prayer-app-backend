@@ -1,5 +1,5 @@
 import uuid
-from sqlalchemy import Column, String, DateTime, ForeignKey, Boolean
+from sqlalchemy import Column, String, DateTime, ForeignKey, Boolean, Text
 from sqlalchemy.sql import func
 
 from app.db.session import Base
@@ -20,6 +20,8 @@ class ScheduledCall(Base):
     chat_enabled = Column(Boolean, default=True, nullable=False)
     screen_share_enabled = Column(Boolean, default=True, nullable=False)
     host_id = Column(String, ForeignKey("users.id"), nullable=True)
+    # Comma-separated list of invited user IDs. NULL / empty = invite everyone.
+    invited_user_ids = Column(Text, nullable=True)
     scheduled_at = Column(DateTime(timezone=True), nullable=False)
     ended_at = Column(DateTime(timezone=True), nullable=True)
     is_rung = Column(Boolean, default=False, nullable=False)

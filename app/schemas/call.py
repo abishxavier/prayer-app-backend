@@ -1,6 +1,6 @@
 from pydantic import BaseModel, ConfigDict
 from datetime import datetime
-from typing import Optional
+from typing import List, Optional
 
 
 class ScheduledCallCreate(BaseModel):
@@ -14,6 +14,8 @@ class ScheduledCallCreate(BaseModel):
     waiting_room_enabled: Optional[bool] = False
     chat_enabled: Optional[bool] = True
     screen_share_enabled: Optional[bool] = True
+    # Optional list of user IDs to invite. Empty list / None = invite everyone.
+    invited_user_ids: Optional[List[str]] = None
 
 
 class InstantMeetingCreate(BaseModel):
@@ -50,6 +52,8 @@ class ScheduledCallOut(BaseModel):
     is_live: Optional[bool] = False
     is_expired: Optional[bool] = False
     minutes_until: Optional[int] = None
+    # List of invited user IDs. Empty = all users invited.
+    invited_user_ids: Optional[List[str]] = None
     model_config = ConfigDict(from_attributes=True)
 
 

@@ -81,6 +81,11 @@ def schedule_call(payload: ScheduledCallCreate, db: Session = Depends(get_db), c
     password_hash = hash_meeting_password(payload.password) if payload.password else None
     access_type = "password" if password_hash else (payload.access_type or "public")
 
+    # Build comma-separated invited user IDs (None = everyone is invited)
+    invited_ids_str: Optional[str] = None
+    if payload.invited_user_ids is not None and len(payload.invited_user_ids) > 0:
+        invited_ids_str = ",".join([uid.strip() for uid in payload.invited_user_ids if uid.strip()])
+
     call = ScheduledCall(
         topic=payload.topic,
         description=payload.description,
@@ -94,6 +99,7 @@ def schedule_call(payload: ScheduledCallCreate, db: Session = Depends(get_db), c
         chat_enabled=payload.chat_enabled if payload.chat_enabled is not None else True,
         screen_share_enabled=payload.screen_share_enabled if payload.screen_share_enabled is not None else True,
         host_id=user_id,
+        invited_user_ids=invited_ids_str,
         scheduled_at=sched_utc
     )
     db.add(call)
@@ -107,6 +113,7 @@ def schedule_call(payload: ScheduledCallCreate, db: Session = Depends(get_db), c
     except Exception:
         pass
 
+    invited_list = invited_ids_str.split(",") if invited_ids_str else None
     return ScheduledCallOut(
         id=call.id,
         topic=call.topic,
@@ -123,7 +130,8 @@ def schedule_call(payload: ScheduledCallCreate, db: Session = Depends(get_db), c
         host_id=call.host_id,
         host_name=user.name,
         scheduled_at=call.scheduled_at,
-        created_at=call.created_at
+        created_at=call.created_at,
+        invited_user_ids=invited_list,
     )
 
 
@@ -231,8 +239,9 @@ def ring_meeting_call(
     current_user: dict = Depends(get_current_user)
 ):
     """
-    Broadcasts a high-priority incoming video call ring notification to all community members
-    for the specified room. Caller device is excluded to prevent ringing the host.
+    Broadcasts a high-priority incoming video call ring notification.
+    If the scheduled call has a selective invite list (invited_user_ids), only those users
+    are notified. Otherwise, all community members except the caller are notified.
     """
     user_id = current_user.get("sub") or current_user.get("id")
     caller = db.query(User).filter(User.id == user_id).first() if user_id else None
@@ -245,16 +254,35 @@ def ring_meeting_call(
     call_type = scheduled.call_type if (scheduled and scheduled.call_type) else "Prayer Meeting"
     host_id = scheduled.host_id if scheduled else user_id
 
-    # Fetch all other active users with device tokens
-    query = db.query(User.device_token).filter(
-        User.device_token.isnot(None),
-        User.device_token != "",
-    )
-    if user_id:
-        query = query.filter(User.id != user_id)
-    
-    user_tokens = query.all()
-    tokens_to_notify = [t[0] for t in user_tokens if t[0] and t[0] != caller_token]
+    # Determine which users to notify:
+    # - If invited_user_ids is set on the call, only notify those users.
+    # - Otherwise, notify all users (broadcast behaviour).
+    invited_ids: Optional[set] = None
+    if scheduled and scheduled.invited_user_ids:
+        raw = [uid.strip() for uid in scheduled.invited_user_ids.split(",") if uid.strip()]
+        if raw:
+            invited_ids = set(raw)
+
+    if invited_ids is not None:
+        # Selective ring — only fetch device tokens of explicitly invited users
+        users_query = db.query(User.id, User.device_token).filter(
+            User.id.in_(invited_ids),
+            User.device_token.isnot(None),
+            User.device_token != "",
+        )
+        if user_id:
+            users_query = users_query.filter(User.id != user_id)
+    else:
+        # Broadcast ring — notify all users with device tokens
+        users_query = db.query(User.id, User.device_token).filter(
+            User.device_token.isnot(None),
+            User.device_token != "",
+        )
+        if user_id:
+            users_query = users_query.filter(User.id != user_id)
+
+    user_rows = users_query.all()
+    tokens_to_notify = [row[1] for row in user_rows if row[1] and row[1] != caller_token]
     unique_tokens = list(set(tokens_to_notify))
 
     fcm_data = {
@@ -289,6 +317,7 @@ def ring_meeting_call(
         "room_name": room_name,
         "sent_count": sent_count,
         "total_targets": len(unique_tokens),
+        "selective": invited_ids is not None,
     }
 
 
