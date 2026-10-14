@@ -114,6 +114,7 @@ def schedule_call(payload: ScheduledCallCreate, db: Session = Depends(get_db), c
         pass
 
     invited_list = invited_ids_str.split(",") if invited_ids_str else None
+    is_private = bool(invited_list and len(invited_list) > 0)
     return ScheduledCallOut(
         id=call.id,
         topic=call.topic,
@@ -132,6 +133,7 @@ def schedule_call(payload: ScheduledCallCreate, db: Session = Depends(get_db), c
         scheduled_at=call.scheduled_at,
         created_at=call.created_at,
         invited_user_ids=invited_list,
+        is_private=is_private,
     )
 
 
@@ -168,8 +170,19 @@ def get_scheduled_calls(db: Session = Depends(get_db), current_user: dict = Depe
         ScheduledCall.scheduled_at >= two_weeks_ago
     ).all()
     
+    current_user_id = str(current_user.get("sub", ""))
     result = []
     for call in calls:
+        # Check strict private meeting visibility:
+        # If invited_user_ids is specified, only the host and invited users are allowed to see it.
+        invited_list = [uid.strip() for uid in call.invited_user_ids.split(",") if uid.strip()] if call.invited_user_ids else None
+        is_private = bool(invited_list and len(invited_list) > 0)
+        is_host = str(call.host_id or "") == current_user_id
+
+        if is_private and not is_host:
+            if not invited_list or current_user_id not in invited_list:
+                continue
+
         host = db.query(User).filter(User.id == call.host_id).first() if call.host_id else None
         room = call.room_name or ""
         
@@ -219,7 +232,9 @@ def get_scheduled_calls(db: Session = Depends(get_db), current_user: dict = Depe
             can_join=can_join,
             is_live=is_live,
             is_expired=is_expired,
-            minutes_until=minutes_until
+            minutes_until=minutes_until,
+            invited_user_ids=invited_list,
+            is_private=is_private,
         ))
         
     # Sort: active / upcoming first (ascending scheduled_at), finished/ended below (descending scheduled_at)
@@ -549,6 +564,27 @@ def get_call_host_status(
         else:
             room_dict.pop(uid, None)
 
+    # Check strict private meeting permissions
+    is_private = bool(scheduled_call and scheduled_call.invited_user_ids and scheduled_call.invited_user_ids.strip())
+    is_invited = True
+    if is_private:
+        raw_invited = [uid.strip() for uid in scheduled_call.invited_user_ids.split(",") if uid.strip()]
+        is_invited = is_current_user_host or (str(user_id) in raw_invited)
+        if not is_invited:
+            return {
+                "room_name": room_name,
+                "is_host_online": False,
+                "is_current_user_host": False,
+                "can_join": False,
+                "is_private": True,
+                "is_invited": False,
+                "error_message": "This is a private meeting. You are not on the invite list.",
+                "is_ended": False,
+                "host_name": host_name,
+                "topic": scheduled_call.topic if scheduled_call else "Prayer Meeting",
+                "call_type": scheduled_call.call_type if scheduled_call else "Prayer Meeting",
+            }
+
     # If current user is host, they can always join (and will become the active host)
     is_ended = room_name in _ended_meeting_rooms
     if scheduled_call and scheduled_call.is_rung:
@@ -562,6 +598,8 @@ def get_call_host_status(
         "is_host_online": is_host_online,
         "is_current_user_host": is_current_user_host,
         "can_join": can_join,
+        "is_private": is_private,
+        "is_invited": is_invited,
         "is_ended": is_ended,
         "host_name": host_name,
         "topic": scheduled_call.topic if scheduled_call else "Prayer Meeting",
@@ -909,6 +947,18 @@ def verify_meeting_access(
 
     is_ended = (call.room_name in _ended_meeting_rooms) or (call.status == "ended") or (diff_seconds < -7200)
 
+    # Check strict private meeting permission
+    is_private = bool(call.invited_user_ids and call.invited_user_ids.strip())
+    is_invited = True
+    if is_private:
+        raw_invited = [uid.strip() for uid in call.invited_user_ids.split(",") if uid.strip()]
+        is_invited = is_host or (str(user_id) in raw_invited)
+        if not is_invited:
+            raise HTTPException(
+                status_code=403,
+                detail="This is a private meeting. You are not on the invite list."
+            )
+
     requires_password = bool(call.password_hash) and not is_host
     requires_waiting_room = bool(call.waiting_room_enabled) and not is_host
 
@@ -925,6 +975,8 @@ def verify_meeting_access(
         requires_waiting_room=requires_waiting_room,
         chat_enabled=call.chat_enabled if call.chat_enabled is not None else True,
         screen_share_enabled=call.screen_share_enabled if call.screen_share_enabled is not None else True,
+        is_private=is_private,
+        is_invited=is_invited,
     )
 
 

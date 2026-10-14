@@ -4,17 +4,18 @@ import json
 import urllib.request
 
 REPO = "abishxavier/prayer-app-backend"
-TAG = "v1.1.6"
-NAME = "v1.1.6 - Instant Member Loading & Selective Call Scheduling"
-BODY = """### What's New in v1.1.6
+TAG = "v1.1.7"
+NAME = "v1.1.7 - Strict Private Meetings & Cumulative Direct Update"
+BODY = """### What's New in v1.1.7
 
-- **Instant Member Loading**: Fixed contact loading when scheduling a video call with offline caching and retry fallback.
-- **Selective Video Call Scheduling**: Pick specific community members by their registration name when scheduling a prayer meeting call, or choose 'Select All' to invite everyone.
-- **Selective Call Ringing**: Incoming video call rings are sent only to the selected participants rather than ringing all devices.
-- **Contact Search**: Real-time searching and filtering of members in the call scheduler.
-- **Performance & Stability**: Enhanced Agora WebRTC connection handling and database schema indexing."""
+- **Strict Private Meetings**: When scheduling a meeting for selected members, only the invited participants and the host can view and join the call. Non-invited users are strictly blocked.
+- **Visual Privacy Badges**: Clear "Private (Invited Only)" badges on meeting cards and scheduler details.
+- **Selective Auto-Ringer**: Both manual rings and automated scheduled rings notify only the invited participants.
+- **Direct Cumulative Updates**: Any older app version instantly jumps directly to the latest release in one single update.
+- **Instant Member Loading**: Optimized community directory with offline caching and instant search by registration name.
+- **WebRTC & Call Stability**: High-performance audio/video rendering and Agora AccessToken2 credentials."""
 
-APK_PATH = r"d:\prayer_app\releases\v1.1.6\prayer_app_v1.1.6.apk"
+APK_PATH = r"d:\prayer_app\releases\v1.1.7\prayer_app_v1.1.7.apk"
 ASSET_NAME = "prayer_app.apk"
 
 # Get token from git credential

@@ -54,6 +54,7 @@ class ScheduledCallOut(BaseModel):
     minutes_until: Optional[int] = None
     # List of invited user IDs. Empty = all users invited.
     invited_user_ids: Optional[List[str]] = None
+    is_private: Optional[bool] = False
     model_config = ConfigDict(from_attributes=True)
 
 
@@ -70,6 +71,8 @@ class MeetingVerifyResponse(BaseModel):
     requires_waiting_room: bool = False
     chat_enabled: bool = True
     screen_share_enabled: bool = True
+    is_private: bool = False
+    is_invited: bool = True
 
 
 class MeetingPasswordVerifyRequest(BaseModel):

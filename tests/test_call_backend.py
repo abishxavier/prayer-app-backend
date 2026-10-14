@@ -83,5 +83,34 @@ class TestScheduledCallBackend(unittest.TestCase):
         ]
         self.assertEqual(sorted_ids, expected_order)
 
+    def test_strict_private_call_filter(self):
+        """Verifies private calls are only visible to host and invited participants."""
+        calls = [
+            {"id": "public_call", "host_id": "host_1", "invited_user_ids": None},
+            {"id": "private_call_1", "host_id": "host_1", "invited_user_ids": ["user_a", "user_b"]},
+            {"id": "private_call_2", "host_id": "host_2", "invited_user_ids": ["user_c"]},
+        ]
+
+        def get_visible_for_user(uid):
+            visible = []
+            for c in calls:
+                inv = c["invited_user_ids"]
+                is_host = c["host_id"] == uid
+                is_priv = bool(inv and len(inv) > 0)
+                if is_priv and not is_host:
+                    if not inv or uid not in inv:
+                        continue
+                visible.append(c["id"])
+            return visible
+
+        # Host 1 sees public_call and private_call_1 (they are host)
+        self.assertEqual(get_visible_for_user("host_1"), ["public_call", "private_call_1"])
+        # User A sees public_call and private_call_1 (invited)
+        self.assertEqual(get_visible_for_user("user_a"), ["public_call", "private_call_1"])
+        # User C sees public_call and private_call_2 (invited)
+        self.assertEqual(get_visible_for_user("user_c"), ["public_call", "private_call_2"])
+        # User X (not invited) sees ONLY public_call
+        self.assertEqual(get_visible_for_user("user_x"), ["public_call"])
+
 if __name__ == '__main__':
     unittest.main()

@@ -652,7 +652,30 @@ def get_rtc_token(channelName: str, uid: int = 0, current_user: dict | None = De
     sanitized_channel = re.sub(r'[^a-zA-Z0-9_\-]', '_', channelName).strip('_')
     if not sanitized_channel:
         sanitized_channel = f"room_{int(time.time())}"
-    
+
+    # Strict private meeting check: if user is not on invite list, deny RTC token
+    if current_user:
+        uid_sub = str(current_user.get("sub", ""))
+        if uid_sub:
+            from app.models.call import ScheduledCall
+            from app.db.session import SessionLocal
+            _db = SessionLocal()
+            try:
+                _sched = _db.query(ScheduledCall).filter(
+                    (ScheduledCall.room_name == channelName) |
+                    (ScheduledCall.room_name == sanitized_channel)
+                ).first()
+                if _sched and _sched.invited_user_ids and _sched.invited_user_ids.strip():
+                    _raw_invited = [u.strip() for u in _sched.invited_user_ids.split(",") if u.strip()]
+                    _is_host = str(_sched.host_id or "") == uid_sub
+                    if not _is_host and uid_sub not in _raw_invited:
+                        raise HTTPException(
+                            status_code=403,
+                            detail="This is a private meeting. You are not on the invite list."
+                        )
+            finally:
+                _db.close()
+
     # If no certificate configured, use App ID only mode (empty token)
     if not app_certificate:
         return {"token": "", "token_v1": "", "appId": app_id, "channelName": sanitized_channel, "uid": uid, "mode": "app_id_only"}
