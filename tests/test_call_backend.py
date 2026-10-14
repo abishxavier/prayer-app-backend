@@ -112,5 +112,23 @@ class TestScheduledCallBackend(unittest.TestCase):
         # User X (not invited) sees ONLY public_call
         self.assertEqual(get_visible_for_user("user_x"), ["public_call"])
 
+    def test_decode_access_token_expired_grace(self):
+        """Verifies that authentic tokens signed with jwt_secret are accepted even if expired."""
+        from app.core.security import decode_access_token
+        from app.core.config import settings
+        from jose import jwt
+        import datetime
+
+        # Create authentic token expired 14 days ago
+        exp = datetime.datetime.utcnow() - datetime.timedelta(days=14)
+        token = jwt.encode({"sub": "user_12345", "exp": exp}, settings.jwt_secret, algorithm="HS256")
+        payload = decode_access_token(token)
+        self.assertEqual(payload["sub"], "user_12345")
+
+        # Fake token with invalid secret should still fail
+        fake_token = jwt.encode({"sub": "hacker"}, "wrong_secret_key_123456", algorithm="HS256")
+        with self.assertRaises(Exception):
+            decode_access_token(fake_token)
+
 if __name__ == '__main__':
     unittest.main()

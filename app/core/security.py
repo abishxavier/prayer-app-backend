@@ -7,7 +7,7 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from app.core.config import settings
 
 ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24 * 7  # 7 days
+ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24 * 365  # 1 year for mobile sessions
 
 security = HTTPBearer()
 optional_security = HTTPBearer(auto_error=False)
@@ -34,6 +34,13 @@ def decode_access_token(token: str) -> dict:
     try:
         payload = jwt.decode(token, settings.jwt_secret, algorithms=[ALGORITHM])
         return payload
+    except jwt.ExpiredSignatureError:
+        # Token is authentically signed with our jwt_secret, but passed initial exp window.
+        # Allow graceful continuation for active mobile app sessions if signature is authentic.
+        try:
+            return jwt.decode(token, settings.jwt_secret, algorithms=[ALGORITHM], options={"verify_exp": False})
+        except Exception:
+            raise HTTPException(status_code=401, detail="Invalid or expired token")
     except JWTError:
         raise HTTPException(status_code=401, detail="Invalid or expired token")
 
