@@ -162,16 +162,32 @@ def _execute_ring(call: Dict[str, Any]):
         except Exception as e:
             logger.warning(f"Could not check live participants (non-fatal): {e}")
 
-        # ── Fetch ALL users with device tokens — INCLUDING the host ──────────────
-        # The host was previously excluded here, causing them to never get the ring.
-        all_users = (
-            db.query(User.id, User.device_token)
-            .filter(
-                User.device_token.isnot(None),
-                User.device_token != "",
+        # ── Fetch users with device tokens — selective invite or all ──────────────
+        # If invited_user_ids is set, only ring the invited members and the host.
+        # Otherwise, ring all community members with registered device tokens.
+        invited_ids_str = getattr(db_call, "invited_user_ids", None)
+        if invited_ids_str:
+            raw_invited = [uid.strip() for uid in invited_ids_str.split(",") if uid.strip()]
+            if host_id and str(host_id) not in raw_invited:
+                raw_invited.append(str(host_id))
+            all_users = (
+                db.query(User.id, User.device_token)
+                .filter(
+                    User.id.in_(raw_invited),
+                    User.device_token.isnot(None),
+                    User.device_token != "",
+                )
+                .all()
             )
-            .all()
-        )
+        else:
+            all_users = (
+                db.query(User.id, User.device_token)
+                .filter(
+                    User.device_token.isnot(None),
+                    User.device_token != "",
+                )
+                .all()
+            )
 
         notif_title = f"{topic}"
         notif_body = f"Host: {host_name} • Tap to Join"
