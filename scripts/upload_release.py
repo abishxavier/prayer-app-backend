@@ -4,18 +4,18 @@ import json
 import urllib.request
 
 REPO = "abishxavier/prayer-app-backend"
-TAG = "v1.1.7"
-NAME = "v1.1.7 - Strict Private Meetings & Cumulative Direct Update"
-BODY = """### What's New in v1.1.7
+TAG = "v1.1.8"
+NAME = "v1.1.8 - Persistent Authentication, Auto-Refresh & Private Calling"
+BODY = """### What's New in v1.1.8
 
+- **Persistent Authentication**: Mobile session token lifetime extended to 1 year so you never get 'Invalid or expired token' errors.
+- **Background Auto-Refresh**: Background Firebase ID token refresh and auto-retry for seamless call scheduling.
 - **Strict Private Meetings**: When scheduling a meeting for selected members, only the invited participants and the host can view and join the call. Non-invited users are strictly blocked.
 - **Visual Privacy Badges**: Clear "Private (Invited Only)" badges on meeting cards and scheduler details.
 - **Selective Auto-Ringer**: Both manual rings and automated scheduled rings notify only the invited participants.
-- **Direct Cumulative Updates**: Any older app version instantly jumps directly to the latest release in one single update.
-- **Instant Member Loading**: Optimized community directory with offline caching and instant search by registration name.
-- **WebRTC & Call Stability**: High-performance audio/video rendering and Agora AccessToken2 credentials."""
+- **Direct Cumulative Updates**: Instant one-tap direct update from any earlier version straight to the newest release."""
 
-APK_PATH = r"d:\prayer_app\releases\v1.1.7\prayer_app_v1.1.7.apk"
+APK_PATH = r"d:\prayer_app\releases\v1.1.8\prayer_app_v1.1.8.apk"
 ASSET_NAME = "prayer_app.apk"
 
 # Get token from git credential
