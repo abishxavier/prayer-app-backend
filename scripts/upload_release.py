@@ -4,18 +4,16 @@ import json
 import urllib.request
 
 REPO = "abishxavier/prayer-app-backend"
-TAG = "v1.1.8"
-NAME = "v1.1.8 - Persistent Authentication, Auto-Refresh & Private Calling"
-BODY = """### What's New in v1.1.8
+TAG = "v1.1.9"
+NAME = "v1.1.9 - Call Audio Fix, Clean UI & WhatsApp Video Layout"
+BODY = """### What's New in v1.1.9
 
-- **Persistent Authentication**: Mobile session token lifetime extended to 1 year so you never get 'Invalid or expired token' errors.
-- **Background Auto-Refresh**: Background Firebase ID token refresh and auto-retry for seamless call scheduling.
-- **Strict Private Meetings**: When scheduling a meeting for selected members, only the invited participants and the host can view and join the call. Non-invited users are strictly blocked.
-- **Visual Privacy Badges**: Clear "Private (Invited Only)" badges on meeting cards and scheduler details.
-- **Selective Auto-Ringer**: Both manual rings and automated scheduled rings notify only the invited participants.
-- **Direct Cumulative Updates**: Instant one-tap direct update from any earlier version straight to the newest release."""
+- **Audio & Microphone Transmission Fix**: Host microphone audio is automatically enabled, unmuted, and routed to speakerphone upon joining, ensuring crystal clear audio on other participants' speakers.
+- **Clean Native UI (Zero Mojibake)**: Completely eliminated garbled unicode / mojibake characters in call controls, buttons, and meeting sheets, replacing them with crisp native Flutter icons and typography.
+- **High-Priority Data Notifications**: Background call notifications delivered as data-only high-priority messages, ensuring recipient devices ring instantly even while locked or in background.
+- **WhatsApp-Style Video Layout & Fit Camera**: No more cropped half-faces; camera now defaults to full frame fit mode with seamless WhatsApp-style 1-on-1 layout."""
 
-APK_PATH = r"d:\prayer_app\releases\v1.1.8\prayer_app_v1.1.8.apk"
+APK_PATH = r"d:\prayer_app\releases\v1.1.9\prayer_app_v1.1.9.apk"
 ASSET_NAME = "prayer_app.apk"
 
 # Get token from git credential

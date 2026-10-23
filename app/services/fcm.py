@@ -117,28 +117,15 @@ def send_push_notification(token: str, title: str, body: str, data: dict = None,
         )
 
         if is_call:
-            # VIDEO CALL: Send as high-priority alert.
-            # Include AndroidNotification on channel 'video_call_channel_v5' to guarantee heads-up display
-            # with ring sound and vibration even if background service execution is delayed,
-            # while passing full fcm_data for the native call ringer and IncomingVideoCallDialog.
+            # VIDEO CALL: Send as high-priority data message for Android so
+            # CallFirebaseMessagingService.onMessageReceived is GUARANTEED to be invoked by the OS
+            # even when the phone is locked or app is in background.
+            # (Adding top-level notification causes Google Play Services to suppress onMessageReceived).
             android_config = messaging.AndroidConfig(
                 priority='high',
                 data=fcm_data,
-                notification=messaging.AndroidNotification(
-                    title=title,
-                    body=body,
-                    sound='default',
-                    channel_id='video_call_channel_v5',
-                    tag=tag,
-                    priority='max',
-                    visibility='public',
-                )
             )
             message = messaging.Message(
-                notification=messaging.Notification(
-                    title=title,
-                    body=body,
-                ),
                 data=fcm_data,
                 token=token,
                 android=android_config,

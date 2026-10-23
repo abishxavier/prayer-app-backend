@@ -14,7 +14,7 @@ from app.schemas.prayer import (
 def repair_mojibake(text: str) -> str:
     if not text or not isinstance(text, str):
         return text
-    if any(p in text for p in ['à®', 'à¯', 'à®¾', 'à®¿', 'ð\x9f', 'â\x80', 'Ã', 'ð']):
+    if any(p in text for p in ['à®', 'à¯', 'ா', 'ி', 'ð\x9f', 'â\x80', 'Ã', 'ð']):
         try:
             return text.encode('latin1').decode('utf-8')
         except Exception:
