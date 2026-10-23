@@ -204,19 +204,27 @@ def login(payload: LoginRequest, db: Session = Depends(get_db)):
     decoded = verify_firebase_token(payload.id_token)
 
     firebase_uid = decoded.get("uid")
-    email = decoded.get("email")
-    name = decoded.get("name") or (email.split("@")[0] if email else "User")
+    if not firebase_uid:
+        raise HTTPException(status_code=400, detail="Firebase token missing uid")
 
-    if not firebase_uid or not email:
-        raise HTTPException(status_code=400, detail="Firebase token missing required fields")
+    email = decoded.get("email") or (f"{firebase_uid[:12]}@prayerapp.org")
+    raw_name = payload.display_name or decoded.get("name")
+    if not raw_name and decoded.get("email"):
+        raw_name = decoded.get("email").split("@")[0].replace(".", " ").title()
+    name = raw_name or "Community Member"
 
-    user = db.query(User).filter(User.firebase_uid == firebase_uid).first()
+    # Search existing user by firebase_uid, email, or verified phone
+    user = db.query(User).filter(
+        (User.firebase_uid == firebase_uid) |
+        ((User.email == email) & (User.email != "")) |
+        ((User.phone == payload.phone) & (User.phone.isnot(None)) & (User.phone != ""))
+    ).first()
     is_new_user = user is None
 
     if is_new_user:
         user = User(
             firebase_uid=firebase_uid,
-            name=payload.display_name or name,
+            name=name,
             email=email,
             device_token=payload.device_token,
             phone=payload.phone,
@@ -226,19 +234,19 @@ def login(payload: LoginRequest, db: Session = Depends(get_db)):
         db.commit()
         db.refresh(user)
     else:
-        updated = False
+        user.firebase_uid = firebase_uid
+        if name and (not user.name or user.name == "User"):
+            user.name = name
         if payload.device_token:
             user.device_token = payload.device_token
-            updated = True
         if payload.phone:
             user.phone = payload.phone
             user.phone_verified = True
-            updated = True
-        if updated:
-            db.add(user)
-            db.commit()
+        db.add(user)
+        db.commit()
+        db.refresh(user)
 
-    access_token = create_access_token(data={"sub": user.id, "firebase_uid": firebase_uid})
+    access_token = create_access_token(data={"sub": user.id, "firebase_uid": firebase_uid, "email": user.email, "name": user.name})
 
     # create a refresh token (random string) and store it with expiry, bound to a device if provided
     rt_value = secrets.token_urlsafe(48)
@@ -533,29 +541,68 @@ def get_all_users(
     current_user: Optional[dict] = Depends(get_optional_current_user),
 ):
     """
-    Returns a lightweight list of all registered users (excluding the current caller and test accounts).
-    Used for the call invitation picker in the Flutter app.
-    Response: list of { id, name, profile_image, phone }
+    Returns a comprehensive list of all registered community members.
+    Includes the caller (flagged with is_self: True) so the host can see themselves clearly.
+    Response: list of { id, name, profile_image, phone, email, is_self }
     """
-    caller_id = current_user.get("sub") if current_user else None
-    query = db.query(User).filter(
-        User.name.isnot(None),
-        User.name != "",
+    # Background sync any missing Firebase Auth users into Postgres
+    try:
+        from firebase_admin import auth as fb_admin_auth
+        fb_page = fb_admin_auth.list_users(max_results=100)
+        existing_uids = {u.firebase_uid for u in db.query(User.firebase_uid).all() if u.firebase_uid}
+        existing_emails = {u.email.lower() for u in db.query(User.email).all() if u.email}
+        added_any = False
+        for fu in fb_page.users:
+            if fu.uid not in existing_uids and (not fu.email or fu.email.lower() not in existing_emails):
+                name = fu.display_name or (fu.email.split("@")[0].replace(".", " ").title() if fu.email else "Community Member")
+                email = fu.email or f"{fu.uid[:12]}@prayerapp.org"
+                new_u = User(firebase_uid=fu.uid, name=name, email=email, phone=fu.phone_number)
+                db.add(new_u)
+                existing_uids.add(fu.uid)
+                if fu.email:
+                    existing_emails.add(fu.email.lower())
+                added_any = True
+        if added_any:
+            db.commit()
+    except Exception as e:
+        print(f"Non-fatal Firebase user auto-sync note: {e}")
+
+    caller_id = str(current_user.get("sub", "")) if current_user else ""
+    caller_fb_uid = str(current_user.get("firebase_uid", "")) if current_user else ""
+
+    users = db.query(User).filter(
         ~User.name.ilike("%smoke%"),
         ~User.name.ilike("%integration tester%"),
-    )
-    if caller_id:
-        query = query.filter(User.id != caller_id)
-    users = query.order_by(User.name).all()
-    return [
-        {
+    ).order_by(User.name.asc().nullslast()).all()
+
+    result = []
+    for u in users:
+        disp_name = (u.name or "").strip()
+        if not disp_name and u.email:
+            disp_name = u.email.split("@")[0].replace(".", " ").title()
+        if not disp_name and u.phone:
+            disp_name = f"Member ({u.phone})"
+        if not disp_name:
+            disp_name = "Community Member"
+
+        is_self = bool(
+            (caller_id and str(u.id) == caller_id) or
+            (caller_id and str(u.firebase_uid or "") == caller_id) or
+            (caller_fb_uid and str(u.firebase_uid or "") == caller_fb_uid)
+        )
+
+        result.append({
             "id": u.id,
-            "name": u.name or "Community Member",
+            "name": disp_name,
             "profile_image": u.profile_image,
-            "phone": u.phone,
-        }
-        for u in users
-    ]
+            "phone": u.phone or "",
+            "email": u.email or "",
+            "is_self": is_self,
+        })
+
+    # Sort so self is right at the top for convenience, followed alphabetically
+    result.sort(key=lambda x: (not x["is_self"], x["name"].lower()))
+    return result
 
 
 @router.post("/auth/users/match-phones")

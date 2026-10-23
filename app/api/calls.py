@@ -55,11 +55,33 @@ def generate_meeting_code(db: Session) -> str:
 
 @router.post("/calls/scheduled", response_model=ScheduledCallOut)
 def schedule_call(payload: ScheduledCallCreate, db: Session = Depends(get_db), current_user: dict = Depends(get_current_user)):
-    user_id = current_user["sub"]
-    
-    user = db.query(User).filter(User.id == user_id).first()
+    user_id = str(current_user.get("sub", "")).strip()
+    fb_uid = str(current_user.get("firebase_uid", "")).strip()
+    user_email = str(current_user.get("email", "")).strip()
+
+    user = db.query(User).filter(
+        (User.id == user_id) |
+        (User.firebase_uid == user_id) |
+        ((User.firebase_uid == fb_uid) & (fb_uid != "")) |
+        ((User.email == user_email) & (user_email != ""))
+    ).first()
+
     if not user:
-        raise HTTPException(status_code=404, detail="User not found")
+        # Auto-heal: ensure host user exists in Postgres so meeting can always be scheduled
+        host_name = current_user.get("name") or "Prayer Leader"
+        host_email = user_email or (f"{fb_uid[:12]}@prayerapp.org" if fb_uid else f"{user_id[:12]}@prayerapp.org")
+        user = User(
+            id=user_id if len(user_id) > 20 and "-" in user_id else str(uuid.uuid4()),
+            firebase_uid=fb_uid or user_id,
+            name=host_name,
+            email=host_email,
+        )
+        db.add(user)
+        db.commit()
+        db.refresh(user)
+
+    # Use canonical Postgres user ID
+    user_id = user.id
 
     # Validate that scheduled_at is in the future
     now_utc = datetime.now(timezone.utc)
