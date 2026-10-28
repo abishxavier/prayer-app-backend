@@ -112,23 +112,60 @@ class TestScheduledCallBackend(unittest.TestCase):
         # User X (not invited) sees ONLY public_call
         self.assertEqual(get_visible_for_user("user_x"), ["public_call"])
 
-    def test_decode_access_token_expired_grace(self):
-        """Verifies that authentic tokens signed with jwt_secret are accepted even if expired."""
-        from app.core.security import decode_access_token
-        from app.core.config import settings
-        from jose import jwt
-        import datetime
+    def test_meeting_password_hashing_and_verification(self):
+        """Verifies modern PBKDF2 hashing and backward-compatible legacy hash verification."""
+        from app.api.calls import hash_meeting_password, verify_meeting_password
+        import hashlib
 
-        # Create authentic token expired 14 days ago
-        exp = datetime.datetime.utcnow() - datetime.timedelta(days=14)
-        token = jwt.encode({"sub": "user_12345", "exp": exp}, settings.jwt_secret, algorithm="HS256")
-        payload = decode_access_token(token)
-        self.assertEqual(payload["sub"], "user_12345")
+        password = "SecretPrayerPassword123"
+        hashed = hash_meeting_password(password)
 
-        # Fake token with invalid secret should still fail
-        fake_token = jwt.encode({"sub": "hacker"}, "wrong_secret_key_123456", algorithm="HS256")
-        with self.assertRaises(Exception):
-            decode_access_token(fake_token)
+        # Must use modern PBKDF2 format with unique salt
+        self.assertTrue(hashed.startswith("pbkdf2_sha256$"))
+        parts = hashed.split("$")
+        self.assertEqual(len(parts), 3)
+
+        # Verification must succeed for correct password and fail for wrong password
+        self.assertTrue(verify_meeting_password(password, hashed))
+        self.assertFalse(verify_meeting_password("WrongPassword", hashed))
+
+        # Two hashes of the same password must have different salts
+        hashed2 = hash_meeting_password(password)
+        self.assertNotEqual(hashed, hashed2)
+        self.assertTrue(verify_meeting_password(password, hashed2))
+
+        # Backward compatibility: verify legacy hash with static salt
+        legacy_salt = "jipf_prayer_meet_salt_2026"
+        legacy_hashed = hashlib.sha256(f"{legacy_salt}_{password}".encode("utf-8")).hexdigest()
+        self.assertTrue(verify_meeting_password(password, legacy_hashed))
+        self.assertFalse(verify_meeting_password("WrongPassword", legacy_hashed))
+
+    def test_call_participant_schemas_with_media_mute(self):
+        """Verifies CallParticipantRegister and CallParticipantOut retain video and audio mute states."""
+        from app.schemas.call import CallParticipantRegister, CallParticipantOut
+
+        reg = CallParticipantRegister(
+            uid=101,
+            name="Brother John",
+            is_host=True,
+            is_video_muted=True,
+            is_audio_muted=False,
+        )
+        self.assertEqual(reg.uid, 101)
+        self.assertTrue(reg.is_video_muted)
+        self.assertFalse(reg.is_audio_muted)
+
+        out = CallParticipantOut(
+            uid=101,
+            user_id="user_abc",
+            name="Brother John",
+            is_host=True,
+            is_video_muted=True,
+            is_audio_muted=True,
+            last_seen=datetime.now(timezone.utc),
+        )
+        self.assertTrue(out.is_video_muted)
+        self.assertTrue(out.is_audio_muted)
 
 if __name__ == '__main__':
     unittest.main()

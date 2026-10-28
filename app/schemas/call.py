@@ -132,6 +132,8 @@ class CallParticipantRegister(BaseModel):
     is_host: bool = False
     is_screen_sharing: Optional[bool] = False
     is_hand_raised: Optional[bool] = False
+    is_video_muted: Optional[bool] = False
+    is_audio_muted: Optional[bool] = False
 
 class CallParticipantOut(BaseModel):
     uid: int
@@ -141,6 +143,8 @@ class CallParticipantOut(BaseModel):
     is_host: bool = False
     is_screen_sharing: bool = False
     is_hand_raised: bool = False
+    is_video_muted: bool = False
+    is_audio_muted: bool = False
     last_seen: datetime
     model_config = ConfigDict(from_attributes=True)
 

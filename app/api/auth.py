@@ -700,28 +700,47 @@ def get_rtc_token(channelName: str, uid: int = 0, current_user: dict | None = De
     if not sanitized_channel:
         sanitized_channel = f"room_{int(time.time())}"
 
-    # Strict private meeting check: if user is not on invite list, deny RTC token
-    if current_user:
-        uid_sub = str(current_user.get("sub", ""))
-        if uid_sub:
-            from app.models.call import ScheduledCall
-            from app.db.session import SessionLocal
-            _db = SessionLocal()
-            try:
-                _sched = _db.query(ScheduledCall).filter(
-                    (ScheduledCall.room_name == channelName) |
-                    (ScheduledCall.room_name == sanitized_channel)
+    # Verify meeting access control and permissions
+    from app.models.call import ScheduledCall, BlockedUser
+    from app.db.session import SessionLocal
+    _db = SessionLocal()
+    try:
+        _sched = _db.query(ScheduledCall).filter(
+            (ScheduledCall.room_name == channelName) |
+            (ScheduledCall.room_name == sanitized_channel)
+        ).first()
+
+        uid_sub = str(current_user.get("sub", "")) if current_user else ""
+
+        if _sched:
+            # 1. Private meeting check: unauthenticated or uninvited users must be rejected
+            if _sched.invited_user_ids and _sched.invited_user_ids.strip():
+                if not current_user or not uid_sub:
+                    raise HTTPException(
+                        status_code=401,
+                        detail="Authentication required to join this private meeting."
+                    )
+                _raw_invited = [u.strip() for u in _sched.invited_user_ids.split(",") if u.strip()]
+                _is_host = str(_sched.host_id or "") == uid_sub
+                if not _is_host and uid_sub not in _raw_invited:
+                    raise HTTPException(
+                        status_code=403,
+                        detail="This is a private meeting. You are not on the invite list."
+                    )
+
+            # 2. Blocked user check: blocked users cannot acquire an RTC token
+            if uid_sub and _sched.host_id:
+                is_blocked = _db.query(BlockedUser).filter(
+                    BlockedUser.user_id == _sched.host_id,
+                    BlockedUser.blocked_user_id == uid_sub
                 ).first()
-                if _sched and _sched.invited_user_ids and _sched.invited_user_ids.strip():
-                    _raw_invited = [u.strip() for u in _sched.invited_user_ids.split(",") if u.strip()]
-                    _is_host = str(_sched.host_id or "") == uid_sub
-                    if not _is_host and uid_sub not in _raw_invited:
-                        raise HTTPException(
-                            status_code=403,
-                            detail="This is a private meeting. You are not on the invite list."
-                        )
-            finally:
-                _db.close()
+                if is_blocked:
+                    raise HTTPException(
+                        status_code=403,
+                        detail="You have been blocked from joining meetings hosted by this user."
+                    )
+    finally:
+        _db.close()
 
     # If no certificate configured, use App ID only mode (empty token)
     if not app_certificate:

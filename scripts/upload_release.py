@@ -4,16 +4,19 @@ import json
 import urllib.request
 
 REPO = "abishxavier/prayer-app-backend"
-TAG = "v1.1.9"
-NAME = "v1.1.9 - Call Audio Fix, Clean UI & WhatsApp Video Layout"
-BODY = """### What's New in v1.1.9
+TAG = "v1.2.0"
+NAME = "v1.2.0 - Video Calling & Security Overhaul"
+BODY = """### What's New in v1.2.0
 
-- **Audio & Microphone Transmission Fix**: Host microphone audio is automatically enabled, unmuted, and routed to speakerphone upon joining, ensuring crystal clear audio on other participants' speakers.
-- **Clean Native UI (Zero Mojibake)**: Completely eliminated garbled unicode / mojibake characters in call controls, buttons, and meeting sheets, replacing them with crisp native Flutter icons and typography.
-- **High-Priority Data Notifications**: Background call notifications delivered as data-only high-priority messages, ensuring recipient devices ring instantly even while locked or in background.
-- **WhatsApp-Style Video Layout & Fit Camera**: No more cropped half-faces; camera now defaults to full frame fit mode with seamless WhatsApp-style 1-on-1 layout."""
+- **Frozen Remote Frame Fix**: Resolved Agora RTC video stream freeze when remote participants toggle their camera off. Canvas controllers and texture buffers are now immediately freed and reset.
+- **Host Moderation Protection**: Enforced client and server locks preventing muted participants from unmuting or turning on camera without host authorization.
+- **Meeting Security & Authorization**: Private meetings strictly reject unauthenticated (401) and uninvited (403) access. Endpoints for ending and deleting meetings now strictly enforce host ownership.
+- **Host Blocked-User Restrictions**: Users blocked by the host are strictly rejected from acquiring Agora RTC channel tokens.
+- **PBKDF2 Password Encryption**: Upgraded meeting password hashing to PBKDF2-HMAC-SHA256 with 100,000 iterations and random salt, maintaining backward compatibility with legacy meetings.
+- **Auto Token Expiry Renewal**: Registered Agora privilege expiry and token request listeners to seamlessly renew credentials during continuous long prayer sessions.
+- **Participant Media State Sync**: Initial camera and mic mute selections from pre-join screen are reliably persisted and communicated to all call members on join."""
 
-APK_PATH = r"d:\prayer_app\releases\v1.1.9\prayer_app_v1.1.9.apk"
+APK_PATH = r"d:\prayer_app\releases\v1.2.0\prayer_app_v1.2.0.apk"
 ASSET_NAME = "prayer_app.apk"
 
 # Get token from git credential

@@ -30,15 +30,46 @@ router = APIRouter()
 from app.services.fcm import send_push_notification
 
 
+import hmac
+
+
 def hash_meeting_password(password: str) -> str:
-    salt = "jipf_prayer_meet_salt_2026"
-    return hashlib.sha256(f"{salt}_{password.strip()}".encode("utf-8")).hexdigest()
+    """Modern PBKDF2-HMAC-SHA256 password hashing with a secure random per-password salt."""
+    salt_hex = secrets.token_hex(16)
+    key = hashlib.pbkdf2_hmac(
+        'sha256',
+        password.strip().encode('utf-8'),
+        bytes.fromhex(salt_hex),
+        iterations=100000
+    )
+    return f"pbkdf2_sha256${salt_hex}${key.hex()}"
 
 
 def verify_meeting_password(plain_password: str, hashed_password: Optional[str]) -> bool:
+    """Verifies password using PBKDF2-HMAC-SHA256 with constant-time comparison and legacy fallback."""
     if not hashed_password:
         return True
-    return hash_meeting_password(plain_password) == hashed_password
+
+    # 1. Modern PBKDF2 verification
+    if hashed_password.startswith("pbkdf2_sha256$"):
+        parts = hashed_password.split("$")
+        if len(parts) == 3:
+            salt_hex, expected_key_hex = parts[1], parts[2]
+            try:
+                key = hashlib.pbkdf2_hmac(
+                    'sha256',
+                    plain_password.strip().encode('utf-8'),
+                    bytes.fromhex(salt_hex),
+                    iterations=100000
+                )
+                return hmac.compare_digest(key.hex(), expected_key_hex)
+            except Exception:
+                return False
+
+    # 2. Backward-compatibility fallback for legacy salted sha256
+    legacy_salt = "jipf_prayer_meet_salt_2026"
+    legacy_hash = hashlib.sha256(f"{legacy_salt}_{plain_password.strip()}".encode("utf-8")).hexdigest()
+    return hmac.compare_digest(legacy_hash, hashed_password)
 
 
 def generate_meeting_code(db: Session) -> str:
@@ -82,6 +113,13 @@ def schedule_call(payload: ScheduledCallCreate, db: Session = Depends(get_db), c
 
     # Use canonical Postgres user ID
     user_id = user.id
+
+    topic_clean = (payload.topic or "").strip()
+    if not topic_clean:
+        raise HTTPException(
+            status_code=400,
+            detail="Meeting topic cannot be empty or whitespace only."
+        )
 
     # Validate that scheduled_at is in the future
     now_utc = datetime.now(timezone.utc)
@@ -301,6 +339,11 @@ def ring_meeting_call(
             invited_ids = set(raw)
 
     if invited_ids is not None:
+        if str(host_id) != str(user_id) and str(user_id) not in invited_ids:
+            raise HTTPException(
+                status_code=403,
+                detail="You cannot ring participants of a private meeting you are not part of."
+            )
         # Selective ring — only fetch device tokens of explicitly invited users
         users_query = db.query(User.id, User.device_token).filter(
             User.id.in_(invited_ids),
@@ -536,6 +579,8 @@ def register_call_participant(
         "is_host": payload.is_host,
         "is_screen_sharing": payload.is_screen_sharing or False,
         "is_hand_raised": payload.is_hand_raised or False,
+        "is_video_muted": payload.is_video_muted or False,
+        "is_audio_muted": payload.is_audio_muted or False,
         "last_seen": datetime.now(timezone.utc)
     }
 
@@ -786,6 +831,18 @@ def end_meeting(
     current_user: dict = Depends(get_current_user)
 ):
     """Manually end a live meeting/scheduled call for all participants."""
+    user_id = str(current_user.get("sub", "")).strip()
+
+    call = db.query(ScheduledCall).filter(
+        (ScheduledCall.room_name == room_name) | (ScheduledCall.id == room_name)
+    ).first()
+
+    if call and call.host_id and str(call.host_id).strip() != user_id:
+        raise HTTPException(
+            status_code=403,
+            detail="Only the meeting host can end this meeting for everyone."
+        )
+
     # 1. Track in-memory as ended and check if already ended (dedup pushes)
     is_already_ended = room_name in _ended_meeting_rooms
     _ended_meeting_rooms.add(room_name)
@@ -795,10 +852,6 @@ def end_meeting(
     _live_meeting_intentions.pop(room_name, None)
 
     # 3. Update ScheduledCall in database
-    call = db.query(ScheduledCall).filter(
-        (ScheduledCall.room_name == room_name) | (ScheduledCall.id == room_name)
-    ).first()
-    
     if call:
         call.status = "ended"
         call.ended_at = datetime.now(timezone.utc)
@@ -821,7 +874,6 @@ def end_meeting(
     # 5. Broadcast FCM meeting_ended ONLY ONCE (skip if already ended to avoid duplicate notifications)
     if not is_already_ended:
         try:
-            user_id = current_user["sub"]
             all_users = db.query(User).filter(User.id != user_id, User.device_token.isnot(None), User.device_token != "").all()
             end_fcm_data = {
                 "type": "meeting_ended",
@@ -849,13 +901,26 @@ def delete_scheduled_meeting(
     current_user: dict = Depends(get_current_user)
 ):
     """Delete a scheduled meeting from database and in-memory pool."""
+    user_id = str(current_user.get("sub", "")).strip()
+
+    call = db.query(ScheduledCall).filter(
+        (ScheduledCall.room_name == room_or_id) | (ScheduledCall.id == room_or_id)
+    ).first()
+
+    if call and call.host_id and str(call.host_id).strip() != user_id:
+        raise HTTPException(
+            status_code=403,
+            detail="Only the meeting host can delete this meeting."
+        )
+
     _live_call_participants.pop(room_or_id, None)
     _live_meeting_intentions.pop(room_or_id, None)
 
-    deleted_count = db.query(ScheduledCall).filter(
-        (ScheduledCall.room_name == room_or_id) | (ScheduledCall.id == room_or_id)
-    ).delete()
-    db.commit()
+    deleted_count = 0
+    if call:
+        db.delete(call)
+        db.commit()
+        deleted_count = 1
 
     return {"status": "ok", "deleted": deleted_count}
 
@@ -1062,9 +1127,16 @@ def request_waiting_room_admission(
 @router.get("/api/meetings/{room_name}/waiting")
 def list_waiting_room_participants(
     room_name: str,
+    db: Session = Depends(get_db),
     current_user: dict = Depends(get_current_user)
 ):
     """Host views list of guests currently in the waiting room."""
+    user_id = str(current_user.get("sub", "")).strip()
+    call = db.query(ScheduledCall).filter(
+        (ScheduledCall.room_name == room_name) | (ScheduledCall.id == room_name)
+    ).first()
+    if call and call.host_id and str(call.host_id).strip() != user_id:
+        raise HTTPException(status_code=403, detail="Only the meeting host can view the waiting room.")
     room_waiting = _waiting_room_participants.get(room_name, {})
     return list(room_waiting.values())
 
@@ -1073,9 +1145,16 @@ def list_waiting_room_participants(
 def waiting_room_action(
     room_name: str,
     payload: WaitingRoomAction,
+    db: Session = Depends(get_db),
     current_user: dict = Depends(get_current_user)
 ):
     """Host admits or rejects a participant waiting to join."""
+    user_id = str(current_user.get("sub", "")).strip()
+    call = db.query(ScheduledCall).filter(
+        (ScheduledCall.room_name == room_name) | (ScheduledCall.id == room_name)
+    ).first()
+    if call and call.host_id and str(call.host_id).strip() != user_id:
+        raise HTTPException(status_code=403, detail="Only the meeting host can admit or reject waiting room participants.")
     uid = str(payload.uid)
     room_waiting = _waiting_room_participants.get(room_name, {})
 

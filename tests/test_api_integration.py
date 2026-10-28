@@ -165,5 +165,184 @@ class TestApiIntegration(unittest.TestCase):
         resp = client.get("/gallery", headers=self.auth_headers)
         self.assertIn(resp.status_code, [200, 204])
 
+    def test_07_private_meeting_token_security(self):
+        """Test that private meetings strictly reject unauthenticated and uninvited users."""
+        from app.models.call import ScheduledCall
+        private_room = f"priv_room_{uuid.uuid4().hex[:8]}"
+        self.created_room_names.append(private_room)
+
+        # Host creates private meeting inviting only 'invited_friend_999'
+        sched = ScheduledCall(
+            topic="Private Prayer",
+            room_name=private_room,
+            host_id=self.test_uid,
+            invited_user_ids="invited_friend_999",
+            scheduled_at=datetime.now(timezone.utc) + timedelta(hours=1),
+            access_type="invite_only",
+            status="created"
+        )
+        self.db.add(sched)
+        self.db.commit()
+
+        # 1. Unauthenticated request -> Must return 401
+        resp_unauth = client.get(f"/auth/rtc-token?channelName={private_room}&uid=99")
+        self.assertEqual(resp_unauth.status_code, 401)
+
+        # 2. Authenticated user who is NOT invited -> Must return 403
+        uninvited_uid = f"uninvited-{uuid.uuid4().hex[:6]}"
+        uninvited_token = create_access_token({"sub": uninvited_uid})
+        resp_uninvited = client.get(
+            f"/auth/rtc-token?channelName={private_room}&uid=99",
+            headers={"Authorization": f"Bearer {uninvited_token}"}
+        )
+        self.assertEqual(resp_uninvited.status_code, 403)
+
+        # 3. Host request -> Must succeed with 200
+        resp_host = client.get(
+            f"/auth/rtc-token?channelName={private_room}&uid=1",
+            headers=self.auth_headers
+        )
+        self.assertEqual(resp_host.status_code, 200)
+        self.assertIn("token", resp_host.json())
+
+        # 4. Invited user request -> Must succeed with 200
+        invited_token = create_access_token({"sub": "invited_friend_999"})
+        resp_invited = client.get(
+            f"/auth/rtc-token?channelName={private_room}&uid=2",
+            headers={"Authorization": f"Bearer {invited_token}"}
+        )
+        self.assertEqual(resp_invited.status_code, 200)
+
+    def test_08_blocked_user_token_rejection(self):
+        """Test that blocked users are rejected with 403 when requesting an RTC token."""
+        from app.models.call import BlockedUser, ScheduledCall
+        blocked_target_uid = f"blocked-user-{uuid.uuid4().hex[:6]}"
+        room_name = f"block_room_{uuid.uuid4().hex[:8]}"
+        self.created_room_names.append(room_name)
+
+        # 1. Create blocked user in users table to satisfy foreign key and commit immediately
+        blocked_user = User(
+            id=blocked_target_uid,
+            firebase_uid=f"fb-{blocked_target_uid}",
+            name="Blocked Person",
+            email=f"{blocked_target_uid}@example.com"
+        )
+        self.db.add(blocked_user)
+        self.db.commit()
+
+        block_entry = None
+        try:
+            sched = ScheduledCall(
+                topic="Public Prayer But User Blocked",
+                room_name=room_name,
+                host_id=self.test_uid,
+                scheduled_at=datetime.now(timezone.utc) + timedelta(hours=1),
+                access_type="public",
+                status="active"
+            )
+            self.db.add(sched)
+
+            # 2. Block the user
+            block_entry = BlockedUser(user_id=self.test_uid, blocked_user_id=blocked_target_uid)
+            self.db.add(block_entry)
+            self.db.commit()
+
+            # 3. Blocked user attempts to acquire token
+            blocked_token = create_access_token({"sub": blocked_target_uid})
+            resp = client.get(
+                f"/auth/rtc-token?channelName={room_name}&uid=55",
+                headers={"Authorization": f"Bearer {blocked_token}"}
+            )
+            self.assertEqual(resp.status_code, 403)
+            self.assertIn("blocked", resp.json()["detail"].lower())
+        finally:
+            # Cleanup block entry and user safely
+            try:
+                if block_entry and block_entry in self.db:
+                    self.db.delete(block_entry)
+                self.db.delete(blocked_user)
+                self.db.commit()
+            except Exception:
+                self.db.rollback()
+
+    def test_09_host_authorization_enforcement(self):
+        """Test that non-host callers cannot end meetings, delete meetings, or manage waiting rooms."""
+        from app.models.call import ScheduledCall
+        room_name = f"host_auth_{uuid.uuid4().hex[:8]}"
+        self.created_room_names.append(room_name)
+
+        sched = ScheduledCall(
+            topic="Host Auth Test Call",
+            room_name=room_name,
+            host_id=self.test_uid,
+            scheduled_at=datetime.now(timezone.utc) + timedelta(hours=1),
+            access_type="public",
+            status="active"
+        )
+        self.db.add(sched)
+        self.db.commit()
+
+        attacker_token = create_access_token({"sub": f"attacker-{uuid.uuid4().hex[:6]}"})
+        attacker_headers = {"Authorization": f"Bearer {attacker_token}"}
+
+        # 1. Non-host attempts to end meeting -> 403
+        resp_end = client.post(f"/calls/{room_name}/end", headers=attacker_headers)
+        self.assertEqual(resp_end.status_code, 403)
+
+        # 2. Non-host attempts to delete meeting -> 403
+        resp_del = client.delete(f"/calls/scheduled/{room_name}", headers=attacker_headers)
+        self.assertEqual(resp_del.status_code, 403)
+
+        # 3. Non-host attempts to view waiting room -> 403
+        resp_wait = client.get(f"/api/meetings/{room_name}/waiting", headers=attacker_headers)
+        self.assertEqual(resp_wait.status_code, 403)
+
+        # 4. Host can view waiting room -> 200
+        resp_host_wait = client.get(f"/api/meetings/{room_name}/waiting", headers=self.auth_headers)
+        self.assertEqual(resp_host_wait.status_code, 200)
+
+        # 5. Host can delete meeting -> 200
+        resp_host_del = client.delete(f"/calls/scheduled/{room_name}", headers=self.auth_headers)
+        self.assertEqual(resp_host_del.status_code, 200)
+        self.assertEqual(resp_host_del.json()["deleted"], 1)
+
+    def test_10_empty_topic_validation(self):
+        """Test that empty or whitespace-only meeting topics are rejected with 400 Bad Request."""
+        payload = {
+            "topic": "    ",
+            "room_name": "room_blank_topic",
+            "scheduled_at": (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat()
+        }
+        resp = client.post("/calls/scheduled", json=payload, headers=self.auth_headers)
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn("cannot be empty", resp.json()["detail"].lower())
+
+    def test_11_participant_media_state_sync(self):
+        """Test participant registration preserves is_video_muted and is_audio_muted."""
+        room_name = f"sync_room_{uuid.uuid4().hex[:8]}"
+        self.created_room_names.append(room_name)
+
+        reg_payload = {
+            "uid": 505,
+            "name": "Sync Participant",
+            "is_host": False,
+            "is_video_muted": True,
+            "is_audio_muted": True
+        }
+        reg_resp = client.post(f"/calls/{room_name}/participants", json=reg_payload, headers=self.auth_headers)
+        self.assertEqual(reg_resp.status_code, 200)
+        p_data = reg_resp.json()["participant"]
+        self.assertTrue(p_data["is_video_muted"])
+        self.assertTrue(p_data["is_audio_muted"])
+
+        # Fetch participants list
+        get_resp = client.get(f"/calls/{room_name}/participants", headers=self.auth_headers)
+        self.assertEqual(get_resp.status_code, 200)
+        parts = get_resp.json()
+        match = [p for p in parts if p["uid"] == 505]
+        self.assertTrue(len(match) > 0)
+        self.assertTrue(match[0]["is_video_muted"])
+        self.assertTrue(match[0]["is_audio_muted"])
+
 if __name__ == '__main__':
     unittest.main()
